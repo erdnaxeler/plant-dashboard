@@ -193,8 +193,14 @@ def device_settings():
     db.session.commit()
 
     # Bubble-compatible shape so existing firmware keeps working.
+    # Also include top-level fields for simpler clients/tools.
     return jsonify(
         {
+            "ok": True,
+            "plant_id": plant.plant_id,
+            "plant_name": plant.plant_name,
+            "start_threshold": settings.start_threshold,
+            "stop_threshold": settings.stop_threshold,
             "response": {
                 "results": [
                     {

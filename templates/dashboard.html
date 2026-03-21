@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="card">
+    <h2>Dashboard</h2>
+    {% if not plants %}
+      <p>No plants found yet. Your ESP32 will create one automatically when it sends telemetry.</p>
+    {% else %}
+      <form class="inline-form" method="get" action="{{ url_for('dashboard') }}">
+        <label for="plant_id">Plant</label>
+        <select id="plant_id" name="plant_id">
+          {% for plant in plants %}
+            <option value="{{ plant.plant_id }}" {% if selected_plant and selected_plant.plant_id == plant.plant_id %}selected{% endif %}>
+              {{ plant.plant_name }} ({{ plant.plant_id }})
+            </option>
+          {% endfor %}
+        </select>
+        <button type="submit">Load</button>
+      </form>
+    {% endif %}
+  </section>
+
+  {% if selected_plant %}
+    <section class="grid">
+      <article class="card stat">
+        <h3>Latest moisture</h3>
+        <p class="value">
+          {% if latest_reading %}{{ "%.1f"|format(latest_reading.moisture) }}%{% else %}No data{% endif %}
+        </p>
+      </article>
+      <article class="card stat">
+        <h3>Start watering below</h3>
+        <p class="value">{{ "%.1f"|format(selected_settings.start_threshold) }}%</p>
+      </article>
+      <article class="card stat">
+        <h3>Stop watering above</h3>
+        <p class="value">{{ "%.1f"|format(selected_settings.stop_threshold) }}%</p>
+      </article>
+    </section>
+
+    <section class="card">
+      <div class="chart-header">
+        <h3>Moisture trend</h3>
+        <select id="range">
+          <option value="24h">Last 24 hours</option>
+          <option value="7d">Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+        </select>
+      </div>
+      <canvas id="moistureChart" height="120"></canvas>
+    </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+      const plantId = "{{ selected_plant.plant_id }}";
+      const chartElement = document.getElementById("moistureChart");
+      const rangeElement = document.getElementById("range");
+      let chart;
+
+      async function loadChart() {
+        const range = rangeElement.value;
+        const response = await fetch(`/api/app/chart?plant_id=${encodeURIComponent(plantId)}&range=${encodeURIComponent(range)}`);
+        const data = await response.json();
+        const points = data.points || [];
+
+        const labels = points.map((item) => new Date(item.time).toLocaleString());
+        const values = points.map((item) => item.moisture);
+
+        if (chart) {
+          chart.destroy();
+        }
+
+        chart = new Chart(chartElement, {
+          type: "line",
+          data: {
+            labels,
+            datasets: [
+              {
+                label: "Moisture (%)",
+                data: values,
+                borderWidth: 2,
+                fill: false,
+                tension: 0.15
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              y: {
+                min: 0,
+                max: 100
+              }
+            }
+          }
+        });
+      }
+
+      rangeElement.addEventListener("change", loadChart);
+      loadChart();
+      setInterval(loadChart, 30000);
+    </script>
+  {% endif %}
+{% endblock %}

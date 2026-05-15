@@ -1,0 +1,11 @@
+.DS_Store
+.venv/
+__pycache__/
+instance/
+*.pyc
+*.db
+.env
+arduino/
+
+# ESP32 device WiFi / API secrets (use secrets.h.example as template)
+firmware/plant-device/secrets.h

@@ -1,0 +1,1493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plant Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #f5f7f5;
+      --surface: #ffffff;
+      --border: #e2e8e2;
+      --text: #1a2e1a;
+      --text-muted: #6b7b6b;
+      --green: #2d8a4e;
+      --green-light: #e8f5e9;
+      --green-dark: #1b5e30;
+      --red: #c0392b;
+      --red-light: #fdecea;
+      --blue: #2980b9;
+      --blue-light: #ebf5fb;
+      --amber: #d4a017;
+      --amber-light: #fff8e1;
+      --radius: 12px;
+      --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+      --shadow-lg: 0 4px 12px rgba(0,0,0,.08);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: var(--shadow);
+    }
+
+    header .header-actions {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      flex-wrap: wrap;
+    }
+
+    header .btn-header {
+      font-size: .82rem;
+      padding: .45rem .9rem;
+      white-space: nowrap;
+    }
+
+    header h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: var(--green-dark);
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+
+    header h1 svg { width: 24px; height: 24px; }
+
+    .header-meta {
+      font-size: .8rem;
+      color: var(--text-muted);
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 4rem 1rem;
+      color: var(--text-muted);
+    }
+
+    .empty-state svg { width: 64px; height: 64px; margin-bottom: 1rem; opacity: .4; }
+    .empty-state h2 { font-size: 1.25rem; margin-bottom: .5rem; color: var(--text); }
+    .empty-state p { max-width: 400px; margin: 0 auto; line-height: 1.5; }
+
+    .plant-grid {
+      display: grid;
+      gap: 1.5rem;
+      grid-template-columns: 1fr;
+    }
+
+    @media (min-width: 768px) {
+      .plant-grid { grid-template-columns: repeat(auto-fill, minmax(480px, 1fr)); }
+    }
+
+    .plant-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      transition: box-shadow .2s;
+    }
+
+    .plant-card:hover { box-shadow: var(--shadow-lg); }
+
+    .card-header {
+      padding: 1rem 1.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .card-header h2 {
+      font-size: 1.05rem;
+      font-weight: 600;
+    }
+
+    .card-header .plant-id {
+      font-size: .75rem;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: .35rem;
+      padding: .25rem .65rem;
+      border-radius: 999px;
+      font-size: .75rem;
+      font-weight: 600;
+    }
+
+    .status-badge .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+    }
+
+    .status-ok { background: var(--green-light); color: var(--green-dark); }
+    .status-ok .dot { background: var(--green); }
+
+    .status-dry { background: var(--red-light); color: var(--red); }
+    .status-dry .dot { background: var(--red); }
+
+    .status-wet { background: var(--blue-light); color: var(--blue); }
+    .status-wet .dot { background: var(--blue); }
+
+    .status-unknown { background: #f0f0f0; color: #999; }
+    .status-unknown .dot { background: #bbb; }
+
+    .card-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .stat {
+      text-align: center;
+      padding: .85rem .5rem;
+    }
+
+    .stat + .stat { border-left: 1px solid var(--border); }
+
+    .stat-label {
+      font-size: .65rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--text-muted);
+      margin-bottom: .25rem;
+    }
+
+    .stat-value {
+      font-size: 1.2rem;
+      font-weight: 700;
+    }
+
+    .card-chart {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      height: 220px;
+      position: relative;
+    }
+
+    .card-chart canvas { width: 100% !important; height: 100% !important; }
+
+    .card-controls {
+      padding: 1rem 1.25rem;
+    }
+
+    .controls-title {
+      font-size: .75rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--text-muted);
+      margin-bottom: .75rem;
+    }
+
+    .threshold-row {
+      display: flex;
+      align-items: center;
+      gap: .75rem;
+      margin-bottom: .5rem;
+    }
+
+    .threshold-row label {
+      font-size: .85rem;
+      min-width: 110px;
+      color: var(--text);
+    }
+
+    .threshold-row input[type="range"] {
+      flex: 1;
+      accent-color: var(--green);
+    }
+
+    .threshold-row .val {
+      font-size: .85rem;
+      font-weight: 600;
+      min-width: 42px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .btn-row {
+      display: flex;
+      justify-content: flex-end;
+      gap: .5rem;
+      margin-top: .75rem;
+    }
+
+    .btn {
+      border: none;
+      border-radius: 8px;
+      padding: .5rem 1.1rem;
+      font-size: .82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, transform .1s;
+    }
+
+    .btn:active { transform: scale(.97); }
+
+    .btn-primary {
+      background: var(--green);
+      color: #fff;
+    }
+
+    .btn-primary:hover { background: var(--green-dark); }
+    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-muted);
+    }
+
+    .btn-ghost:hover { background: var(--bg); }
+
+    .toast-container {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: .5rem;
+    }
+
+    .toast {
+      background: var(--text);
+      color: #fff;
+      padding: .7rem 1.2rem;
+      border-radius: 8px;
+      font-size: .85rem;
+      box-shadow: var(--shadow-lg);
+      animation: slideIn .25s ease-out;
+    }
+
+    .toast.error { background: var(--red); }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .last-updated {
+      font-size: .7rem;
+      color: var(--text-muted);
+      padding: .5rem 1.25rem .85rem;
+      text-align: right;
+    }
+
+    .chart-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: .65rem 1.25rem 0;
+    }
+
+    .chart-toolbar-label {
+      font-size: .65rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--text-muted);
+    }
+
+    .range-picker {
+      display: flex;
+      gap: .25rem;
+    }
+
+    .range-btn {
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-muted);
+      border-radius: 6px;
+      padding: .25rem .6rem;
+      font-size: .72rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all .15s;
+    }
+
+    .range-btn:hover { border-color: var(--green); color: var(--green); }
+
+    .range-btn.active {
+      background: var(--green);
+      color: #fff;
+      border-color: var(--green);
+    }
+
+    .login-overlay {
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .login-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-lg);
+      padding: 2.5rem 2rem;
+      width: 100%;
+      max-width: 360px;
+      text-align: center;
+    }
+
+    .login-box h2 {
+      font-size: 1.15rem;
+      margin-bottom: .35rem;
+      color: var(--green-dark);
+    }
+
+    .login-box p {
+      font-size: .85rem;
+      color: var(--text-muted);
+      margin-bottom: 1.25rem;
+    }
+
+    .login-box input {
+      width: 100%;
+      padding: .6rem .85rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: .9rem;
+      margin-bottom: .75rem;
+      outline: none;
+      transition: border-color .15s;
+    }
+
+    .login-box input:focus { border-color: var(--green); }
+
+    .login-box .login-error {
+      color: var(--red);
+      font-size: .8rem;
+      margin-bottom: .5rem;
+      min-height: 1.2em;
+    }
+
+    .cluster-section {
+      margin-bottom: 2.25rem;
+      padding: 1rem 1.25rem;
+      background: linear-gradient(180deg, #e8f5e9 0%, var(--bg) 100%);
+      border: 1px solid #c8e6c9;
+      border-radius: var(--radius);
+    }
+
+    .section-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: .75rem;
+      margin-bottom: 1rem;
+    }
+
+    .section-head h2 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: var(--green-dark);
+    }
+
+    .section-head p {
+      font-size: .8rem;
+      color: var(--text-muted);
+      width: 100%;
+      margin-top: -.25rem;
+    }
+
+    .moisture-section-title {
+      font-size: .95rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin: 2rem 0 .75rem;
+      padding-bottom: .35rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .cluster-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    .cluster-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .cluster-card .card-header { flex-wrap: wrap; gap: .5rem; }
+
+    .cluster-meta {
+      font-size: .75rem;
+      color: var(--text-muted);
+      font-family: monospace;
+      word-break: break-all;
+    }
+
+    .status-fault {
+      background: var(--red-light);
+      color: var(--red);
+    }
+
+    .status-fault .dot { background: var(--red); }
+
+    .status-pending {
+      background: var(--amber-light);
+      color: #8a6d00;
+    }
+
+    .status-pending .dot { background: var(--amber); }
+
+    .cal-block {
+      padding: 0 1.25rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .cal-block h3 {
+      font-size: .72rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--text-muted);
+      margin: .75rem 0 .5rem;
+    }
+
+    .pot-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: .5rem;
+    }
+
+    @media (max-width: 640px) {
+      .pot-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    .pot-tile {
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      padding: .5rem .35rem;
+      text-align: center;
+      cursor: pointer;
+      background: var(--surface);
+      transition: border-color .15s, background .15s;
+    }
+
+    .pot-tile:hover { border-color: var(--green); }
+
+    .pot-tile.selected {
+      border-color: var(--green);
+      background: var(--green-light);
+    }
+
+    .pot-tile .pot-icon { margin: 0 auto .35rem; color: var(--text-muted); }
+    .pot-tile.selected .pot-icon { color: var(--green-dark); }
+
+    .pot-label {
+      font-size: .68rem;
+      font-weight: 600;
+      line-height: 1.25;
+      color: var(--text);
+    }
+
+    .plant-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .4rem;
+    }
+
+    .plant-chip {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: .35rem .75rem;
+      font-size: .78rem;
+      cursor: pointer;
+      background: var(--surface);
+      transition: all .12s;
+    }
+
+    .plant-chip:hover:not(.disabled) { border-color: var(--green); }
+
+    .plant-chip.selected {
+      background: var(--green);
+      color: #fff;
+      border-color: var(--green);
+    }
+
+    .plant-chip.disabled {
+      opacity: .35;
+      cursor: not-allowed;
+      text-decoration: line-through;
+    }
+
+    .plant-chip .chip-sub {
+      font-size: .62rem;
+      opacity: .85;
+      margin-left: .25rem;
+    }
+
+    .pairing-box {
+      background: var(--blue-light);
+      border: 1px solid #b8d4e8;
+      border-radius: 8px;
+      padding: .75rem 1rem;
+      margin-top: .75rem;
+      font-size: .85rem;
+    }
+
+    .pairing-code {
+      font-family: ui-monospace, monospace;
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: .15em;
+      margin: .35rem 0;
+    }
+
+    .cluster-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .5rem;
+      margin-top: .75rem;
+    }
+
+    .cluster-actions .btn { font-size: .78rem; padding: .45rem .85rem; }
+
+    .btn-danger {
+      background: transparent;
+      color: var(--red);
+      border: 1px solid var(--red);
+    }
+
+    .btn-danger:hover { background: var(--red-light); }
+  </style>
+</head>
+<body>
+  <div class="login-overlay" id="loginOverlay">
+    <div class="login-box">
+      <h2>Plant Dashboard</h2>
+      <p>Enter your dashboard password to continue.</p>
+      <input type="password" id="loginPassword" placeholder="Password" autofocus>
+      <div class="login-error" id="loginError"></div>
+      <button class="btn btn-primary" style="width:100%" onclick="attemptLogin()">Sign in</button>
+    </div>
+  </div>
+  <header>
+    <h1>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M7 20h10"/><path d="M12 20v-8"/>
+        <path d="M12 12C12 8 8 4.5 3 4c0 6 3.5 8 9 8z"/>
+        <path d="M12 12c0-4 4-7.5 9-8 0 6-3.5 8-9 8z"/>
+      </svg>
+      Plant Dashboard
+    </h1>
+    <div class="header-actions">
+      <button type="button" class="btn btn-primary btn-header" id="btnAddClusterHeader" onclick="createCluster()" title="Create a timer-based cluster (above soil moisture cards)">+ Timer cluster</button>
+      <span class="header-meta" id="headerMeta"></span>
+    </div>
+  </header>
+
+  <div class="container">
+    <section class="cluster-section" id="clusterSection">
+      <div class="section-head">
+        <div>
+          <h2>Timer clusters</h2>
+          <p>Create a cluster, calibrate pot size and plants, then pair your ESP32 with a one-time code (WiFi setup stays on the device for now).</p>
+        </div>
+        <button type="button" class="btn btn-primary" onclick="createCluster()">New cluster</button>
+      </div>
+      <div id="clusterGrid" class="cluster-grid"></div>
+    </section>
+
+    <h2 class="moisture-section-title">Soil moisture devices</h2>
+
+    <div id="emptyState" class="empty-state" style="display:none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M7 20h10"/><path d="M12 20v-8"/>
+        <path d="M12 12C12 8 8 4.5 3 4c0 6 3.5 8 9 8z"/>
+        <path d="M12 12c0-4 4-7.5 9-8 0 6-3.5 8-9 8z"/>
+      </svg>
+      <h2>No plants yet</h2>
+      <p>Once your device starts sending moisture data, your plants will appear here automatically.</p>
+    </div>
+
+    <div id="plantGrid" class="plant-grid"></div>
+  </div>
+
+  <div class="toast-container" id="toasts"></div>
+
+  <script>
+    function authHeaders(extra) {
+      const h = { ...extra };
+      const token = sessionStorage.getItem('dashToken');
+      if (token) h['Authorization'] = `Bearer ${token}`;
+      return h;
+    }
+
+    const API = {
+      plants: () => fetch('/api/app/plants', { headers: authHeaders() }).then(r => {
+        if (r.status === 401) throw new Error('AUTH');
+        return r.json();
+      }),
+      chart: (id, days) => fetch(`/api/app/chart?plant_id=${encodeURIComponent(id)}&days=${days}`, { headers: authHeaders() }).then(r => r.json()),
+      updateSettings: (id, start, stop) => fetch('/api/app/settings', {
+        method: 'PUT',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ plant_id: id, start_threshold: start, stop_threshold: stop })
+      }).then(r => r.json()),
+      catalogPlants: () => fetch('/api/app/catalog-plants', { headers: authHeaders() }).then(r => {
+        if (r.status === 401) throw new Error('AUTH');
+        if (!r.ok) throw new Error('CATALOG_HTTP');
+        return r.json();
+      }),
+      clusters: () => fetch('/api/app/clusters', { headers: authHeaders() }).then(r => {
+        if (r.status === 401) throw new Error('AUTH');
+        if (!r.ok) throw new Error('CLUSTER_HTTP');
+        return r.json();
+      }),
+      createCluster: (name) => fetch('/api/app/clusters', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ name: name || 'Cluster' })
+      }).then(r => {
+        if (r.status === 401) throw new Error('AUTH');
+        return r.json();
+      }),
+      clusterCalibrate: (publicId, pot, plantIds) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/calibrate`, {
+        method: 'PUT',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ pot_size: pot, catalog_plant_ids: plantIds })
+      }).then(r => r.json()),
+      clusterVolume: (publicId, pct) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/volume`, {
+        method: 'PUT',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ ml_volume_pct: pct })
+      }).then(r => r.json()),
+      clusterPairingCode: (publicId) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/pairing-code`, {
+        method: 'POST',
+        headers: authHeaders()
+      }).then(r => r.json()),
+      clusterUnpair: (publicId) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/unpair`, {
+        method: 'POST',
+        headers: authHeaders()
+      }).then(r => r.json()),
+      clusterClearFault: (publicId) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/clear-fault`, {
+        method: 'POST',
+        headers: authHeaders()
+      }).then(r => r.json()),
+      clusterDelete: (publicId) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}`, {
+        method: 'DELETE',
+        headers: authHeaders()
+      }).then(r => r.json()),
+      clusterWaterings: (publicId, days) => fetch(`/api/app/cluster/${encodeURIComponent(publicId)}/waterings?days=${days}`, { headers: authHeaders() }).then(r => r.json()),
+    };
+
+    const charts = {};
+    const clusterCharts = {};
+    const selectedRange = {};
+    const clusterChartRange = {};
+    let plantData = [];
+    let clusterData = [];
+    let catalogData = [];
+    const clusterDraft = {};
+
+    function attemptLogin() {
+      const pw = document.getElementById('loginPassword').value;
+      if (!pw) return;
+      sessionStorage.setItem('dashToken', pw);
+      document.getElementById('loginError').textContent = '';
+      loadDashboard();
+    }
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && document.getElementById('loginOverlay').style.display !== 'none') {
+        attemptLogin();
+      }
+    });
+
+    function showLogin(msg) {
+      document.getElementById('loginOverlay').style.display = 'flex';
+      if (msg) document.getElementById('loginError').textContent = msg;
+    }
+
+    function hideLogin() {
+      document.getElementById('loginOverlay').style.display = 'none';
+    }
+
+    function toast(msg, isError) {
+      const el = document.createElement('div');
+      el.className = 'toast' + (isError ? ' error' : '');
+      el.textContent = msg;
+      document.getElementById('toasts').appendChild(el);
+      setTimeout(() => el.remove(), 3000);
+    }
+
+    function moistureStatus(moisture, start, stop) {
+      if (moisture == null) return { label: 'No data', cls: 'status-unknown' };
+      if (moisture < start) return { label: 'Needs water', cls: 'status-dry' };
+      if (moisture > stop) return { label: 'Very wet', cls: 'status-wet' };
+      return { label: 'Healthy', cls: 'status-ok' };
+    }
+
+    function formatTime(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function renderCard(p) {
+      const status = moistureStatus(p.latest_moisture, p.start_threshold, p.stop_threshold);
+      const moistureDisplay = p.latest_moisture != null ? p.latest_moisture.toFixed(1) + '%' : '—';
+      const cardId = `card-${p.plant_id}`;
+      const chartId = `chart-${p.plant_id}`;
+
+      return `
+        <div class="plant-card" id="${cardId}">
+          <div class="card-header">
+            <div>
+              <h2>${esc(p.plant_name)}</h2>
+              <span class="plant-id">${esc(p.plant_id)}</span>
+            </div>
+            <span class="status-badge ${status.cls}"><span class="dot"></span>${status.label}</span>
+          </div>
+          <div class="card-stats">
+            <div class="stat">
+              <div class="stat-label">Current</div>
+              <div class="stat-value">${moistureDisplay}</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Start water</div>
+              <div class="stat-value">${p.start_threshold.toFixed(0)}%</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Stop water</div>
+              <div class="stat-value">${p.stop_threshold.toFixed(0)}%</div>
+            </div>
+          </div>
+          <div class="chart-toolbar">
+            <span class="chart-toolbar-label">Moisture History</span>
+            <div class="range-picker" id="range-${p.plant_id}">
+              <button class="range-btn active" data-days="7" onclick="setRange('${esc(p.plant_id)}', 7, this)">7D</button>
+              <button class="range-btn" data-days="30" onclick="setRange('${esc(p.plant_id)}', 30, this)">30D</button>
+              <button class="range-btn" data-days="90" onclick="setRange('${esc(p.plant_id)}', 90, this)">90D</button>
+              <button class="range-btn" data-days="365" onclick="setRange('${esc(p.plant_id)}', 365, this)">1Y</button>
+            </div>
+          </div>
+          <div class="card-chart"><canvas id="${chartId}"></canvas></div>
+          <div class="last-updated">Last reading: ${formatTime(p.latest_time)}</div>
+          <div class="card-controls">
+            <div class="controls-title">Watering Thresholds</div>
+            <div class="threshold-row">
+              <label for="start-${p.plant_id}">Start watering</label>
+              <input type="range" id="start-${p.plant_id}" min="0" max="100" step="1" value="${p.start_threshold}">
+              <span class="val" id="startVal-${p.plant_id}">${p.start_threshold.toFixed(0)}%</span>
+            </div>
+            <div class="threshold-row">
+              <label for="stop-${p.plant_id}">Stop watering</label>
+              <input type="range" id="stop-${p.plant_id}" min="0" max="100" step="1" value="${p.stop_threshold}">
+              <span class="val" id="stopVal-${p.plant_id}">${p.stop_threshold.toFixed(0)}%</span>
+            </div>
+            <div class="btn-row">
+              <button class="btn btn-ghost" onclick="resetSliders('${esc(p.plant_id)}', ${p.start_threshold}, ${p.stop_threshold})">Reset</button>
+              <button class="btn btn-primary" id="saveBtn-${p.plant_id}" onclick="saveThresholds('${esc(p.plant_id)}')">Save</button>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function bindSliders(plantId) {
+      const startEl = document.getElementById(`start-${plantId}`);
+      const stopEl = document.getElementById(`stop-${plantId}`);
+      const startVal = document.getElementById(`startVal-${plantId}`);
+      const stopVal = document.getElementById(`stopVal-${plantId}`);
+
+      startEl.addEventListener('input', () => {
+        let v = parseInt(startEl.value);
+        if (v >= parseInt(stopEl.value)) {
+          v = parseInt(stopEl.value) - 1;
+          startEl.value = v;
+        }
+        startVal.textContent = v + '%';
+      });
+
+      stopEl.addEventListener('input', () => {
+        let v = parseInt(stopEl.value);
+        if (v <= parseInt(startEl.value)) {
+          v = parseInt(startEl.value) + 1;
+          stopEl.value = v;
+        }
+        stopVal.textContent = v + '%';
+      });
+    }
+
+    function resetSliders(plantId, origStart, origStop) {
+      document.getElementById(`start-${plantId}`).value = origStart;
+      document.getElementById(`stop-${plantId}`).value = origStop;
+      document.getElementById(`startVal-${plantId}`).textContent = origStart.toFixed(0) + '%';
+      document.getElementById(`stopVal-${plantId}`).textContent = origStop.toFixed(0) + '%';
+    }
+
+    async function saveThresholds(plantId) {
+      const start = parseFloat(document.getElementById(`start-${plantId}`).value);
+      const stop = parseFloat(document.getElementById(`stop-${plantId}`).value);
+      const btn = document.getElementById(`saveBtn-${plantId}`);
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+
+      try {
+        const res = await API.updateSettings(plantId, start, stop);
+        if (res.error) throw new Error(res.error);
+        toast('Thresholds updated');
+        await loadDashboard();
+      } catch (e) {
+        toast(e.message || 'Failed to save', true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save';
+      }
+    }
+
+    async function loadChart(plantId, canvasId, startTh, stopTh) {
+      const days = selectedRange[plantId] || 7;
+      const data = await API.chart(plantId, days);
+      const ctx = document.getElementById(canvasId);
+      if (!ctx) return;
+
+      if (charts[plantId]) {
+        charts[plantId].destroy();
+      }
+
+      const labels = data.map(d => new Date(d.time));
+      const values = data.map(d => d.moisture);
+
+      charts[plantId] = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Moisture %',
+            data: values,
+            borderColor: '#2d8a4e',
+            backgroundColor: 'rgba(45,138,78,.08)',
+            fill: true,
+            tension: .3,
+            pointRadius: data.length > 60 ? 0 : 3,
+            pointHoverRadius: 5,
+            borderWidth: 2,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { intersect: false, mode: 'index' },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#1a2e1a',
+              titleFont: { size: 12 },
+              bodyFont: { size: 12 },
+              callbacks: {
+                label: ctx => `Moisture: ${ctx.parsed.y.toFixed(1)}%`
+              }
+            },
+            annotation: undefined,
+          },
+          scales: {
+            x: {
+              type: 'time',
+              time: { tooltipFormat: 'MMM d, HH:mm' },
+              grid: { display: false },
+              ticks: { font: { size: 11 }, color: '#6b7b6b', maxTicksLimit: 6 },
+            },
+            y: {
+              min: 0,
+              max: 100,
+              grid: { color: '#f0f0f0' },
+              ticks: {
+                font: { size: 11 },
+                color: '#6b7b6b',
+                callback: v => v + '%',
+              }
+            }
+          }
+        },
+        plugins: [{
+          id: 'thresholdLines',
+          beforeDraw(chart) {
+            const { ctx, chartArea, scales } = chart;
+            if (!chartArea) return;
+            const yStart = scales.y.getPixelForValue(startTh);
+            const yStop = scales.y.getPixelForValue(stopTh);
+
+            ctx.save();
+            ctx.setLineDash([6, 4]);
+            ctx.lineWidth = 1;
+
+            ctx.strokeStyle = 'rgba(192,57,43,.5)';
+            ctx.beginPath();
+            ctx.moveTo(chartArea.left, yStart);
+            ctx.lineTo(chartArea.right, yStart);
+            ctx.stroke();
+
+            ctx.strokeStyle = 'rgba(41,128,185,.5)';
+            ctx.beginPath();
+            ctx.moveTo(chartArea.left, yStop);
+            ctx.lineTo(chartArea.right, yStop);
+            ctx.stroke();
+
+            ctx.restore();
+          }
+        }]
+      });
+    }
+
+    async function setRange(plantId, days, btnEl) {
+      selectedRange[plantId] = days;
+      const picker = document.getElementById(`range-${plantId}`);
+      picker.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+      btnEl.classList.add('active');
+
+      const p = plantData.find(x => x.plant_id === plantId);
+      if (p) {
+        await loadChart(plantId, `chart-${plantId}`, p.start_threshold, p.stop_threshold);
+      }
+    }
+
+    const POT_KEYS = ['5.5x4.5', '8x7', '9.5x8.5', '12x11'];
+    const POT_LABEL = {
+      '5.5x4.5': '5.5" × 4.5"',
+      '8x7': '8" × 7"',
+      '9.5x8.5': '9.5" × 8.5"',
+      '12x11': '12" × 11"',
+    };
+
+    function groupLabel(g) {
+      if (g === 'daily') return 'Daily';
+      if (g === 'twice_weekly') return '2× / week';
+      if (g === 'weekly') return 'Weekly';
+      return g || '—';
+    }
+
+    function potIconSvg(key) {
+      const rim = { '5.5x4.5': 14, '8x7': 18, '9.5x8.5': 21, '12x11': 24 };
+      const h = rim[key] || 16;
+      return `<svg class="pot-icon" width="40" height="${h + 10}" viewBox="0 0 40 ${h + 10}" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M6 4h28l-2.5 ${h + 2}H8.5L6 4z"/>
+      </svg>`;
+    }
+
+    function clusterStatusBadge(c) {
+      if (c.device_status === 'fault_pump_max') {
+        return { label: 'Pump fault', cls: 'status-fault' };
+      }
+      if (c.has_device && c.device_status === 'ok') {
+        return { label: 'Device OK', cls: 'status-ok' };
+      }
+      if (c.is_calibrated && !c.has_device) {
+        return { label: 'Needs pairing', cls: 'status-pending' };
+      }
+      return { label: 'Uncalibrated', cls: 'status-unknown' };
+    }
+
+    function ensureClusterDraft(publicId) {
+      if (!clusterDraft[publicId]) {
+        clusterDraft[publicId] = { pot: null, plantIds: [] };
+      }
+      return clusterDraft[publicId];
+    }
+
+    function clusterPickPot(publicId, potKey) {
+      const d = ensureClusterDraft(publicId);
+      d.pot = potKey;
+      document.querySelectorAll(`[data-pot-wrap="${esc(publicId)}"] .pot-tile`).forEach(t => {
+        t.classList.toggle('selected', t.dataset.pot === potKey);
+      });
+    }
+
+    function clusterTogglePlant(publicId, plantId) {
+      const d = ensureClusterDraft(publicId);
+      const idx = d.plantIds.indexOf(plantId);
+      if (idx >= 0) {
+        d.plantIds.splice(idx, 1);
+      } else {
+        if (d.plantIds.length >= 3) return;
+        const p = catalogData.find(x => x.id === plantId);
+        if (!p) return;
+        if (d.plantIds.length > 0) {
+          const g0 = catalogData.find(x => x.id === d.plantIds[0])?.watering_group;
+          if (g0 && p.watering_group !== g0) return;
+        }
+        d.plantIds.push(plantId);
+      }
+      const locked = d.plantIds.length
+        ? catalogData.find(x => x.id === d.plantIds[0])?.watering_group
+        : null;
+      document.querySelectorAll(`[data-plant-wrap="${esc(publicId)}"] .plant-chip`).forEach(chip => {
+        const pid = parseInt(chip.dataset.plantId, 10);
+        const g = catalogData.find(x => x.id === pid)?.watering_group;
+        const selected = d.plantIds.includes(pid);
+        const disabled = Boolean(locked && g !== locked && !selected);
+        chip.classList.toggle('selected', selected);
+        chip.classList.toggle('disabled', disabled);
+      });
+    }
+
+    function showRecalibrateForm(publicId) {
+      const c = clusterData.find(x => x.public_id === publicId);
+      if (!c) return;
+      clusterDraft[publicId] = {
+        pot: c.pot_size,
+        plantIds: (c.catalog_plants || []).map(p => p.id),
+      };
+      const el = document.getElementById(`cal-block-${publicId}`);
+      if (el) el.style.display = 'block';
+      const d = clusterDraft[publicId];
+      document.querySelectorAll(`[data-pot-wrap="${esc(publicId)}"] .pot-tile`).forEach(t => {
+        t.classList.toggle('selected', t.dataset.pot === d.pot);
+      });
+      const locked = d.plantIds.length
+        ? catalogData.find(x => x.id === d.plantIds[0])?.watering_group
+        : null;
+      document.querySelectorAll(`[data-plant-wrap="${esc(publicId)}"] .plant-chip`).forEach(chip => {
+        const pid = parseInt(chip.dataset.plantId, 10);
+        const g = catalogData.find(x => x.id === pid)?.watering_group;
+        const selected = d.plantIds.includes(pid);
+        const disabled = Boolean(locked && g !== locked && !selected);
+        chip.classList.toggle('selected', selected);
+        chip.classList.toggle('disabled', disabled);
+      });
+    }
+
+    async function saveClusterCalibration(publicId) {
+      const d = ensureClusterDraft(publicId);
+      if (!d.pot || !d.plantIds.length) {
+        toast('Choose a pot size and at least one plant', true);
+        return;
+      }
+      try {
+        const res = await API.clusterCalibrate(publicId, d.pot, d.plantIds);
+        if (res.error) throw new Error(res.error);
+        toast('Cluster calibrated');
+        await loadDashboard();
+      } catch (e) {
+        toast(e.message || 'Calibration failed', true);
+      }
+    }
+
+    async function createCluster() {
+      try {
+        const res = await API.createCluster('Cluster');
+        if (res.error) throw new Error(res.error);
+        clusterDraft[res.public_id] = { pot: null, plantIds: [] };
+        toast('Cluster created');
+        await loadDashboard();
+      } catch (e) {
+        if (e.message === 'AUTH') {
+          sessionStorage.removeItem('dashToken');
+          showLogin('Incorrect password');
+          return;
+        }
+        toast(e.message || 'Failed to create cluster', true);
+      }
+    }
+
+    async function requestPairingCode(publicId) {
+      try {
+        const res = await API.clusterPairingCode(publicId);
+        if (res.error) throw new Error(res.error);
+        const box = document.getElementById(`pairing-${publicId}`);
+        if (box) {
+          box.style.display = 'block';
+          box.innerHTML = `<strong>Pairing code</strong> (enter on device via WebSerial or your pairing flow):<div class="pairing-code">${esc(res.pairing_code)}</div><span style="font-size:.75rem;color:var(--text-muted)">Expires ${formatTime(res.pairing_expires_at)} UTC</span>`;
+        }
+        toast('Pairing code generated');
+      } catch (e) {
+        toast(e.message || 'Failed to get code', true);
+      }
+    }
+
+    async function unpairCluster(publicId) {
+      if (!confirm('Unpair this device? The ESP32 will need a new pairing code.')) return;
+      try {
+        const res = await API.clusterUnpair(publicId);
+        if (res.error) throw new Error(res.error);
+        toast('Device unpaired');
+        await loadDashboard();
+      } catch (e) {
+        toast(e.message || 'Unpair failed', true);
+      }
+    }
+
+    async function clearClusterFault(publicId) {
+      try {
+        const res = await API.clusterClearFault(publicId);
+        if (res.error) throw new Error(res.error);
+        toast('Fault cleared on server — reset the ESP32 if needed');
+        await loadDashboard();
+      } catch (e) {
+        toast(e.message || 'Failed to clear fault', true);
+      }
+    }
+
+    async function deleteCluster(publicId) {
+      if (!confirm('Delete this cluster and its watering history?')) return;
+      try {
+        const res = await API.clusterDelete(publicId);
+        if (res.error) throw new Error(res.error);
+        delete clusterDraft[publicId];
+        toast('Cluster deleted');
+        await loadDashboard();
+      } catch (e) {
+        toast(e.message || 'Delete failed', true);
+      }
+    }
+
+    let clusterVolumeSaveTimers = {};
+
+    async function saveClusterVolumePct(publicId, pct, silent) {
+      try {
+        const res = await API.clusterVolume(publicId, pct);
+        if (res.error) throw new Error(res.error);
+        const vEl = document.getElementById(`mlVolVal-${publicId}`);
+        if (vEl) vEl.textContent = pct.toFixed(0) + '%';
+        if (!silent) toast('Water volume updated');
+      } catch (e) {
+        toast(e.message || 'Save failed', true);
+      }
+    }
+
+    function bindClusterVolumeSlider(publicId, initialPct) {
+      const el = document.getElementById(`mlVol-${publicId}`);
+      if (!el || el.dataset.bound) return;
+      el.dataset.bound = '1';
+      el.addEventListener('input', () => {
+        const pct = parseFloat(el.value);
+        const vEl = document.getElementById(`mlVolVal-${publicId}`);
+        if (vEl) vEl.textContent = pct.toFixed(0) + '%';
+        clearTimeout(clusterVolumeSaveTimers[publicId]);
+        clusterVolumeSaveTimers[publicId] = setTimeout(() => {
+          saveClusterVolumePct(publicId, pct, true);
+        }, 400);
+      });
+    }
+
+    async function loadClusterChart(publicId, days) {
+      const canvasId = `cchart-${publicId}`;
+      const ctx = document.getElementById(canvasId);
+      if (!ctx) return;
+
+      const data = await API.clusterWaterings(publicId, days);
+      if (clusterCharts[publicId]) {
+        clusterCharts[publicId].destroy();
+      }
+
+      const labels = data.map(d => new Date(d.time));
+      const values = data.map(d => d.ml);
+
+      clusterCharts[publicId] = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Water (ml)',
+            data: values,
+            borderColor: '#2980b9',
+            backgroundColor: 'rgba(41,128,185,.1)',
+            fill: true,
+            tension: 0.25,
+            pointRadius: data.length > 40 ? 0 : 3,
+            borderWidth: 2,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { intersect: false, mode: 'index' },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: c => `Water: ${c.parsed.y.toFixed(0)} ml`
+              }
+            }
+          },
+          scales: {
+            x: {
+              type: 'time',
+              time: { tooltipFormat: 'MMM d, HH:mm' },
+              grid: { display: false },
+              ticks: { maxTicksLimit: 6, color: '#6b7b6b' },
+            },
+            y: {
+              beginAtZero: true,
+              grid: { color: '#f0f0f0' },
+              ticks: { color: '#6b7b6b', callback: v => v + ' ml' },
+            }
+          }
+        }
+      });
+    }
+
+    async function setClusterRange(publicId, days, btnEl) {
+      clusterChartRange[publicId] = days;
+      const picker = document.getElementById(`crange-${publicId}`);
+      if (picker) {
+        picker.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+        btnEl.classList.add('active');
+      }
+      await loadClusterChart(publicId, days);
+    }
+
+    function renderClusterCard(c) {
+      const st = clusterStatusBadge(c);
+      const plantsSummary = (c.catalog_plants || []).map(p => esc(p.name)).join(', ') || '—';
+      const draft = clusterDraft[c.public_id] || { pot: null, plantIds: [] };
+      const potGrid = POT_KEYS.map(pk => `
+        <button type="button" class="pot-tile${draft.pot === pk ? ' selected' : (c.pot_size === pk && !draft.pot ? ' selected' : '')}" data-pot="${esc(pk)}"
+          onclick="clusterPickPot('${esc(c.public_id)}', '${esc(pk)}')">
+          ${potIconSvg(pk)}
+          <div class="pot-label">${esc(POT_LABEL[pk] || pk)}</div>
+        </button>`).join('');
+
+      const lockedGroup = draft.plantIds.length
+        ? catalogData.find(x => x.id === draft.plantIds[0])?.watering_group
+        : null;
+
+      const plantChips = catalogData.map(p => {
+        const selected = draft.plantIds.includes(p.id);
+        const disabled = Boolean(lockedGroup && p.watering_group !== lockedGroup && !selected);
+        const dim = disabled ? ' disabled' : '';
+        const sel = selected ? ' selected' : '';
+        return `<button type="button" class="plant-chip${sel}${dim}" data-plant-id="${p.id}"
+          onclick="clusterTogglePlant('${esc(c.public_id)}', ${p.id})">
+          ${esc(p.name)}<span class="chip-sub">(${esc(groupLabel(p.watering_group))})</span>
+        </button>`;
+      }).join('');
+
+      const calDisplay = c.is_calibrated ? 'none' : 'block';
+      const recalDisplay = 'none';
+
+      const pairingHtml = c.is_calibrated
+        ? `<div id="pairing-${esc(c.public_id)}" class="pairing-box" style="display:none"></div>
+           <div class="cluster-actions">
+             ${c.has_device ? '' : `<button type="button" class="btn btn-primary" onclick="requestPairingCode('${esc(c.public_id)}')">Generate pairing code</button>`}
+             ${c.has_device ? `<button type="button" class="btn btn-ghost" onclick="unpairCluster('${esc(c.public_id)}')">Unpair device</button>` : ''}
+             <button type="button" class="btn btn-ghost" onclick="showRecalibrateForm('${esc(c.public_id)}')">Change pot / plants</button>
+             ${c.device_status === 'fault_pump_max' ? `<button type="button" class="btn btn-primary" onclick="clearClusterFault('${esc(c.public_id)}')">Clear fault (server)</button>` : ''}
+             <button type="button" class="btn btn-danger" onclick="deleteCluster('${esc(c.public_id)}')">Delete cluster</button>
+           </div>`
+        : '';
+
+      const calibratedBlock = c.is_calibrated ? `
+        <div class="card-stats">
+          <div class="stat"><div class="stat-label">Pot</div><div class="stat-value" style="font-size:.85rem">${esc(POT_LABEL[c.pot_size] || c.pot_size || '—')}</div></div>
+          <div class="stat"><div class="stat-label">Rhythm</div><div class="stat-value" style="font-size:.85rem">${esc(groupLabel(c.watering_group))}</div></div>
+          <div class="stat"><div class="stat-label">Target / week</div><div class="stat-value">${Number(c.effective_ml_per_week || 0).toFixed(0)} ml</div></div>
+        </div>
+        <div style="padding:.75rem 1.25rem;font-size:.8rem;color:var(--text-muted);border-bottom:1px solid var(--border)">
+          Plants: ${plantsSummary}<br>
+          <span style="display:block;margin-top:.35rem">${esc(c.status_message || '')}</span>
+          ${c.last_watering_at ? `<span style="display:block;margin-top:.25rem">Last watering: ${formatTime(c.last_watering_at)} · ${Number(c.last_watering_ml || 0).toFixed(0)} ml (UTC)</span>` : ''}
+        </div>
+        <div class="chart-toolbar">
+          <span class="chart-toolbar-label">Water log</span>
+          <div class="range-picker" id="crange-${esc(c.public_id)}">
+            <button type="button" class="range-btn" data-days="7" onclick="setClusterRange('${esc(c.public_id)}', 7, this)">7D</button>
+            <button type="button" class="range-btn active" data-days="30" onclick="setClusterRange('${esc(c.public_id)}', 30, this)">30D</button>
+            <button type="button" class="range-btn" data-days="90" onclick="setClusterRange('${esc(c.public_id)}', 90, this)">90D</button>
+          </div>
+        </div>
+        <div class="card-chart"><canvas id="cchart-${esc(c.public_id)}"></canvas></div>
+        <div class="card-controls">
+          <div class="controls-title">Weekly water target (slider)</div>
+          <div class="threshold-row">
+            <label for="mlVol-${esc(c.public_id)}">Volume vs table</label>
+            <input type="range" id="mlVol-${esc(c.public_id)}" min="50" max="150" step="1" value="${c.ml_volume_pct}">
+            <span class="val" id="mlVolVal-${esc(c.public_id)}">${Number(c.ml_volume_pct).toFixed(0)}%</span>
+          </div>
+          <p style="font-size:.72rem;color:var(--text-muted);margin-top:.35rem">Each event ≈ ${Number(c.ml_per_event || 0).toFixed(0)} ml at current setting (UTC schedule, no catch-up).</p>
+        </div>
+        ${pairingHtml}` : '';
+
+      return `
+        <div class="cluster-card" id="cluster-card-${esc(c.public_id)}">
+          <div class="card-header">
+            <div>
+              <h2>${esc(c.name)}</h2>
+              <div class="cluster-meta">${esc(c.public_id)}</div>
+            </div>
+            <span class="status-badge ${st.cls}"><span class="dot"></span>${st.label}</span>
+          </div>
+          <div id="cal-block-${esc(c.public_id)}" class="cal-block" style="display:${c.is_calibrated ? recalDisplay : calDisplay}">
+            <h3>Pot size (cluster)</h3>
+            <div class="pot-grid" data-pot-wrap="${esc(c.public_id)}">${potGrid}</div>
+            <h3>Plants in this cluster</h3>
+            <p style="font-size:.75rem;color:var(--text-muted);margin-bottom:.5rem">Pick 1–3 plants with the same watering rhythm. Other rhythms are greyed out once you start.</p>
+            <div class="plant-chips" data-plant-wrap="${esc(c.public_id)}">${plantChips}</div>
+            <div class="btn-row">
+              <button type="button" class="btn btn-primary" onclick="saveClusterCalibration('${esc(c.public_id)}')">Save calibration</button>
+            </div>
+          </div>
+          ${calibratedBlock}
+        </div>`;
+    }
+
+    async function loadDashboard() {
+      let plants = [];
+      try {
+        plants = await API.plants();
+      } catch (e) {
+        if (e.message === 'AUTH') {
+          sessionStorage.removeItem('dashToken');
+          showLogin('Incorrect password');
+          return;
+        }
+        toast('Failed to load moisture devices', true);
+      }
+
+      let clusters = [];
+      let catalog = [];
+      try {
+        [clusters, catalog] = await Promise.all([
+          API.clusters(),
+          API.catalogPlants(),
+        ]);
+      } catch (e) {
+        if (e.message === 'AUTH') {
+          sessionStorage.removeItem('dashToken');
+          showLogin('Incorrect password');
+          return;
+        }
+        toast('Timer cluster API failed — deploy the latest app.py to your host, then hard-refresh (⌘⇧R).', true);
+      }
+
+      plantData = plants;
+      clusterData = Array.isArray(clusters) ? clusters : [];
+      catalogData = Array.isArray(catalog) ? catalog : [];
+
+      hideLogin();
+
+      const grid = document.getElementById('plantGrid');
+      const empty = document.getElementById('emptyState');
+      const meta = document.getElementById('headerMeta');
+      const cgrid = document.getElementById('clusterGrid');
+
+      clusterData.forEach(c => {
+        if (!c.is_calibrated && !clusterDraft[c.public_id]) {
+          clusterDraft[c.public_id] = { pot: null, plantIds: [] };
+        }
+      });
+
+      if (!clusterData.length) {
+        cgrid.innerHTML = '<p style="color:var(--text-muted);font-size:.9rem;padding:1rem 0">No timer clusters yet. Use <strong>New cluster</strong> to add one.</p>';
+      } else {
+        cgrid.innerHTML = clusterData.map(renderClusterCard).join('');
+        clusterData.forEach(c => {
+          if (!c.is_calibrated) {
+            const d = ensureClusterDraft(c.public_id);
+            if (d.pot) {
+              document.querySelectorAll(`[data-pot-wrap="${esc(c.public_id)}"] .pot-tile`).forEach(t => {
+                t.classList.toggle('selected', t.dataset.pot === d.pot);
+              });
+            }
+            if (d.plantIds.length) {
+              const locked = catalogData.find(x => x.id === d.plantIds[0])?.watering_group;
+              document.querySelectorAll(`[data-plant-wrap="${esc(c.public_id)}"] .plant-chip`).forEach(chip => {
+                const pid = parseInt(chip.dataset.plantId, 10);
+                const g = catalogData.find(x => x.id === pid)?.watering_group;
+                const selected = d.plantIds.includes(pid);
+                const disabled = Boolean(locked && g !== locked && !selected);
+                chip.classList.toggle('selected', selected);
+                chip.classList.toggle('disabled', disabled);
+              });
+            }
+          }
+          if (c.is_calibrated) {
+            bindClusterVolumeSlider(c.public_id, c.ml_volume_pct);
+            const days = clusterChartRange[c.public_id] || 30;
+            const picker = document.getElementById(`crange-${c.public_id}`);
+            if (picker) {
+              picker.querySelectorAll('.range-btn').forEach(b => {
+                b.classList.toggle('active', parseInt(b.dataset.days, 10) === days);
+              });
+            }
+            loadClusterChart(c.public_id, days);
+          }
+        });
+      }
+
+      const nP = plantData.length;
+      const nC = clusterData.length;
+      meta.textContent = `${nC} cluster${nC === 1 ? '' : 's'} · ${nP} moisture device${nP === 1 ? '' : 's'} · Updated ${new Date().toLocaleTimeString()}`;
+
+      if (!nP) {
+        grid.innerHTML = '';
+        empty.style.display = 'block';
+      } else {
+        empty.style.display = 'none';
+        grid.innerHTML = plantData.map(renderCard).join('');
+
+        for (const p of plantData) {
+          bindSliders(p.plant_id);
+
+          const days = selectedRange[p.plant_id] || 7;
+          const picker = document.getElementById(`range-${p.plant_id}`);
+          if (picker) {
+            picker.querySelectorAll('.range-btn').forEach(b => {
+              b.classList.toggle('active', parseInt(b.dataset.days) === days);
+            });
+          }
+
+          loadChart(p.plant_id, `chart-${p.plant_id}`, p.start_threshold, p.stop_threshold);
+        }
+      }
+    }
+
+    if (sessionStorage.getItem('dashToken')) {
+      loadDashboard();
+    }
+    setInterval(() => {
+      if (sessionStorage.getItem('dashToken')) loadDashboard();
+    }, 60_000);
+  </script>
+</body>
+</html>

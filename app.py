@@ -569,34 +569,49 @@ def device_settings():
 @app.route("/api/device/pair", methods=["POST"])
 def device_pair():
     """Link a physical device to a cluster using a short-lived pairing code (no prior token)."""
-    payload = request.get_json() or {}
-    code = (payload.get("pairing_code") or "").strip().upper()
-    if not code or len(code) < 6:
-        return jsonify({"error": "pairing_code required"}), 400
+    try:
+        payload = request.get_json(silent=True) or {}
+        raw = payload.get("pairing_code", "")
+        code = "".join(ch for ch in str(raw).strip().upper() if ch.isdigit())
+        if len(code) != 6:
+            return jsonify({"error": "pairing_code must be 6 digits"}), 400
 
-    now = _utc_now()
-    cluster = Cluster.query.filter_by(pairing_code=code).first()
-    expires = _as_utc(cluster.pairing_expires_at) if cluster else None
-    if not cluster or not expires or expires < now:
-        return jsonify({"error": "invalid or expired pairing code"}), 400
+        now = _utc_now()
+        cluster = Cluster.query.filter_by(pairing_code=code).first()
+        if not cluster:
+            return jsonify({"error": "invalid or expired pairing code"}), 400
 
-    if cluster.device_token:
-        return jsonify({"error": "cluster already paired"}), 400
+        expires = _as_utc(cluster.pairing_expires_at)
+        if not expires or expires < now:
+            return jsonify({"error": "invalid or expired pairing code"}), 400
 
-    token = secrets.token_hex(32)
-    cluster.device_token = token
-    cluster.pairing_code = None
-    cluster.pairing_expires_at = None
-    cluster.device_status = "ok"
-    db.session.commit()
+        if cluster.device_token:
+            return jsonify({"error": "cluster already paired"}), 400
 
-    return jsonify(
-        {
-            "ok": True,
-            "device_token": token,
-            "cluster_public_id": cluster.public_id,
-        }
-    )
+        token = secrets.token_hex(32)
+        cluster.device_token = token
+        cluster.pairing_code = None
+        cluster.pairing_expires_at = None
+        cluster.device_status = "ok"
+        db.session.commit()
+
+        return jsonify(
+            {
+                "ok": True,
+                "device_token": token,
+                "cluster_public_id": cluster.public_id,
+            }
+        )
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.exception("device_pair failed")
+        return jsonify({"error": "pairing failed", "detail": str(exc)}), 500
+
+
+@app.route("/api/build")
+def api_build():
+    """Lets you verify Railway is running the latest app (check after deploy)."""
+    return jsonify({"build": "2026-05-23-pairing-fix-v2"})
 
 
 @app.route("/api/device/timer/state", methods=["GET"])

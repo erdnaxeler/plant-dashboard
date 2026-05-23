@@ -9,3 +9,4 @@ arduino/
 
 # ESP32 device WiFi / API secrets (use secrets.h.example as template)
 firmware/plant-device/secrets.h
+firmware/plant-device-timer/secrets.h

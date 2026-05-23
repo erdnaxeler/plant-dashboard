@@ -708,6 +708,14 @@
         method: 'POST',
         headers: authHeaders()
       }).then(r => r.json()),
+      clusterStartWatering: (publicId) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/start-watering`, {
+        method: 'POST',
+        headers: authHeaders()
+      }).then(r => r.json()),
+      clusterPauseWatering: (publicId) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/pause-watering`, {
+        method: 'POST',
+        headers: authHeaders()
+      }).then(r => r.json()),
       clusterDelete: (publicId) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}`, {
         method: 'DELETE',
         headers: authHeaders()
@@ -1161,10 +1169,32 @@
       try {
         const res = await API.clusterClearFault(publicId);
         if (res.error) throw new Error(res.error);
-        toast('Fault cleared on server — reset the ESP32 if needed');
+        toast('Fault cleared — tap Start watering when ready');
         await loadDashboard();
       } catch (e) {
         toast(e.message || 'Failed to clear fault', true);
+      }
+    }
+
+    async function startClusterWatering(publicId) {
+      try {
+        const res = await API.clusterStartWatering(publicId);
+        if (res.error) throw new Error(res.error);
+        toast('Schedule started — device will water on its next check if due');
+        await loadDashboard();
+      } catch (e) {
+        toast(e.message || 'Failed to start watering', true);
+      }
+    }
+
+    async function pauseClusterWatering(publicId) {
+      try {
+        const res = await API.clusterPauseWatering(publicId);
+        if (res.error) throw new Error(res.error);
+        toast('Schedule paused');
+        await loadDashboard();
+      } catch (e) {
+        toast(e.message || 'Failed to pause', true);
       }
     }
 
@@ -1306,9 +1336,25 @@
       const calDisplay = c.is_calibrated ? 'none' : 'block';
       const recalDisplay = 'none';
 
+      const showStartBtn = c.is_calibrated && !c.watering_armed && c.device_status !== 'fault_pump_max';
+      const showPauseBtn = c.is_calibrated && c.watering_armed && c.device_status !== 'fault_pump_max';
+      const scheduleHint = !c.watering_armed
+        ? 'Watering will not run until you tap <strong>Start watering</strong>.'
+        : (c.last_watering_at
+          ? `Next slot (UTC): ${c.next_watering_at ? formatTime(c.next_watering_at) : '—'}`
+          : 'First watering runs on the next device check (within ~1 min).');
+
       const pairingHtml = c.is_calibrated
-        ? `<div id="pairing-${esc(c.public_id)}" class="pairing-box" style="display:none"></div>
-           <div class="cluster-actions">
+        ? `<div style="padding:.75rem 1.25rem;border-bottom:1px solid var(--border)">
+             <div class="controls-title">Schedule</div>
+             <p style="font-size:.78rem;color:var(--text-muted);margin:.35rem 0 .65rem">${scheduleHint}</p>
+             <div class="cluster-actions" style="margin-top:0">
+               ${showStartBtn ? `<button type="button" class="btn btn-primary" onclick="startClusterWatering('${esc(c.public_id)}')">Start watering</button>` : ''}
+               ${showPauseBtn ? `<button type="button" class="btn btn-ghost" onclick="pauseClusterWatering('${esc(c.public_id)}')">Pause schedule</button>` : ''}
+             </div>
+           </div>
+           <div id="pairing-${esc(c.public_id)}" class="pairing-box" style="display:none;margin:0 1.25rem"></div>
+           <div class="cluster-actions" style="padding:0 1.25rem 1rem">
              ${c.has_device ? '' : `<button type="button" class="btn btn-primary" onclick="requestPairingCode('${esc(c.public_id)}')">Generate pairing code</button>`}
              ${c.has_device ? `<button type="button" class="btn btn-ghost" onclick="unpairCluster('${esc(c.public_id)}')">Unpair device</button>` : ''}
              <button type="button" class="btn btn-ghost" onclick="showRecalibrateForm('${esc(c.public_id)}')">Change pot / plants</button>
@@ -1344,7 +1390,7 @@
             <input type="range" id="mlVol-${esc(c.public_id)}" min="50" max="150" step="1" value="${c.ml_volume_pct}">
             <span class="val" id="mlVolVal-${esc(c.public_id)}">${Number(c.ml_volume_pct).toFixed(0)}%</span>
           </div>
-          <p style="font-size:.72rem;color:var(--text-muted);margin-top:.35rem">Each event ≈ ${Number(c.ml_per_event || 0).toFixed(0)} ml at current setting (UTC schedule, no catch-up).</p>
+          <p style="font-size:.72rem;color:var(--text-muted);margin-top:.35rem">Each event ≈ ${Number(c.ml_per_event || 0).toFixed(0)} ml · UTC schedule · no catch-up · armed from app only.</p>
         </div>
         ${pairingHtml}` : '';
 

@@ -34,10 +34,10 @@ db = SQLAlchemy(app)
 
 # ml/week by pot size (row) × watering group (column) — indoor presets
 WATERING_TABLE_ML_WEEK: dict[str, dict[str, int]] = {
-    "5.5x4.5": {"daily": 175, "twice_weekly": 300, "weekly": 450},
-    "8x7": {"daily": 350, "twice_weekly": 525, "weekly": 800},
-    "9.5x8.5": {"daily": 475, "twice_weekly": 700, "weekly": 1000},
-    "12x11": {"daily": 750, "twice_weekly": 1050, "weekly": 1450},
+    "5.5x4.5": {"daily": 200, "twice_weekly": 200, "weekly": 150},
+    "8x7": {"daily": 400, "twice_weekly": 350, "weekly": 250},
+    "9.5x8.5": {"daily": 550, "twice_weekly": 450, "weekly": 350},
+    "12x11": {"daily": 800, "twice_weekly": 650, "weekly": 500},
 }
 
 POT_SIZES = tuple(WATERING_TABLE_ML_WEEK.keys())
@@ -301,7 +301,8 @@ def _cluster_from_bearer() -> Optional[Cluster]:
 def _effective_ml_per_week(cluster: Cluster) -> float:
     if cluster.baseline_ml_per_week is None:
         return 0.0
-    return round(cluster.baseline_ml_per_week * (cluster.ml_volume_pct / 100.0), 2)
+    plant_count = len(cluster.catalog_plants) or 1
+    return round(cluster.baseline_ml_per_week * plant_count * (cluster.ml_volume_pct / 100.0), 2)
 
 
 def _events_per_week(group: str) -> int:

@@ -721,6 +721,14 @@
         headers: authHeaders()
       }).then(r => r.json()),
       clusterWaterings: (publicId, days) => fetch(`/api/app/cluster/${encodeURIComponent(publicId)}/waterings?days=${days}`, { headers: authHeaders() }).then(r => r.json()),
+      clusterManualWater: (publicId) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/manual-water`, {
+        method: 'POST',
+        headers: authHeaders()
+      }).then(r => r.json()),
+      clusterTogglePumpTest: (publicId) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/toggle-pump-test`, {
+        method: 'POST',
+        headers: authHeaders()
+      }).then(r => r.json()),
     };
 
     const charts = {};
@@ -1211,6 +1219,27 @@
       }
     }
 
+    async function manualWaterOnce(publicId) {
+      try {
+        const res = await API.clusterManualWater(publicId);
+        if (res.error) throw new Error(res.error);
+        toast('Manual watering triggered - device will water on next poll (~5 sec)');
+      } catch (e) {
+        toast(e.message || 'Manual water failed', true);
+      }
+    }
+
+    async function togglePumpTest(publicId) {
+      try {
+        const res = await API.clusterTogglePumpTest(publicId);
+        if (res.error) throw new Error(res.error);
+        toast('Pump test mode toggled - check device in ~5 sec');
+        setTimeout(() => loadDashboard(), 1000);
+      } catch (e) {
+        toast(e.message || 'Pump test toggle failed', true);
+      }
+    }
+
     let clusterVolumeSaveTimers = {};
 
     async function saveClusterVolumePct(publicId, pct, silent) {
@@ -1354,6 +1383,14 @@
              </div>
            </div>
            <div id="pairing-${esc(c.public_id)}" class="pairing-box" style="display:none;margin:0 1.25rem"></div>
+           <div style="padding:.75rem 1.25rem;border-bottom:1px solid var(--border)">
+             <div class="controls-title">Hardware Testing</div>
+             <p style="font-size:.78rem;color:var(--text-muted);margin:0 0 .65rem">Use these buttons to test if your pump/relay is working correctly.</p>
+             <div class="cluster-actions" style="margin-top:0">
+               ${c.has_device ? `<button type="button" class="btn btn-primary" onclick="manualWaterOnce('${esc(c.public_id)}')">💧 Manual water once</button>` : ''}
+               ${c.has_device ? `<button type="button" class="btn btn-ghost" onclick="togglePumpTest('${esc(c.public_id)}')">⚙️ Toggle pump test</button>` : ''}
+             </div>
+           </div>
            <div class="cluster-actions" style="padding:0 1.25rem 1rem">
              ${c.has_device ? '' : `<button type="button" class="btn btn-primary" onclick="requestPairingCode('${esc(c.public_id)}')">Generate pairing code</button>`}
              ${c.has_device ? `<button type="button" class="btn btn-ghost" onclick="unpairCluster('${esc(c.public_id)}')">Unpair device</button>` : ''}

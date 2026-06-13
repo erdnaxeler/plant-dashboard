@@ -676,14 +676,9 @@ def device_timer_state():
         return jsonify({"error": "Unauthorized"}), 401
 
     cluster.last_device_ping_at = _utc_now()
-    
-    # Clear manual_water_trigger after device retrieves it (one-time trigger)
-    payload = _cluster_timer_payload(cluster)
-    if cluster.manual_water_trigger and payload.get("manual_water_trigger"):
-        cluster.manual_water_trigger = False
-    
     db.session.commit()
 
+    payload = _cluster_timer_payload(cluster)
     return jsonify(payload)
 
 
@@ -718,6 +713,20 @@ def device_timer_complete():
 
     db.session.commit()
     return jsonify({"ok": True, "last_watering_at": cluster.last_watering_at.isoformat()})
+
+
+@app.route("/api/device/timer/manual-complete", methods=["POST"])
+def device_timer_manual_complete():
+    """Device calls this after completing manual watering to clear the trigger."""
+    cluster = _cluster_from_bearer()
+    if not cluster:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    # Clear the manual water trigger
+    cluster.manual_water_trigger = False
+    db.session.commit()
+    
+    return jsonify({"ok": True})
 
 
 @app.route("/api/app/chart")

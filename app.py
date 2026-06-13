@@ -537,6 +537,7 @@ def _serialize_cluster(c: Cluster) -> dict[str, Any]:
         "ml_per_event": _ml_per_event(c),
         "is_calibrated": c.is_calibrated,
         "watering_armed": bool(c.watering_armed),
+        "pump_test_mode": bool(c.pump_test_mode),
         "next_watering_at": (
             _next_watering_at(c).isoformat() if _next_watering_at(c) else None
         ),

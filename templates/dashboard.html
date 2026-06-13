@@ -1388,7 +1388,7 @@
              <p style="font-size:.78rem;color:var(--text-muted);margin:0 0 .65rem">Use these buttons to test if your pump/relay is working correctly.</p>
              <div class="cluster-actions" style="margin-top:0">
                ${c.has_device ? `<button type="button" class="btn btn-primary" onclick="manualWaterOnce('${esc(c.public_id)}')">💧 Manual water once</button>` : ''}
-               ${c.has_device ? `<button type="button" class="btn btn-ghost" onclick="togglePumpTest('${esc(c.public_id)}')">⚙️ Toggle pump test</button>` : ''}
+               ${c.has_device ? `<button type="button" class="btn ${c.pump_test_mode ? 'btn-danger' : 'btn-ghost'}" onclick="togglePumpTest('${esc(c.public_id)}')">${c.pump_test_mode ? '⛔ Pump test ON - Click to stop' : '⚙️ Pump test (off)'}</button>` : ''}
              </div>
            </div>
            <div class="cluster-actions" style="padding:0 1.25rem 1rem">

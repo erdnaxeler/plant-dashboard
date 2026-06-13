@@ -721,10 +721,6 @@
         headers: authHeaders()
       }).then(r => r.json()),
       clusterWaterings: (publicId, days) => fetch(`/api/app/cluster/${encodeURIComponent(publicId)}/waterings?days=${days}`, { headers: authHeaders() }).then(r => r.json()),
-      clusterManualWater: (publicId) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/manual-water`, {
-        method: 'POST',
-        headers: authHeaders()
-      }).then(r => r.json()),
       clusterTogglePumpTest: (publicId) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/toggle-pump-test`, {
         method: 'POST',
         headers: authHeaders()
@@ -1219,16 +1215,6 @@
       }
     }
 
-    async function manualWaterOnce(publicId) {
-      try {
-        const res = await API.clusterManualWater(publicId);
-        if (res.error) throw new Error(res.error);
-        toast('Manual watering triggered - device will water on next poll (~5 sec)');
-      } catch (e) {
-        toast(e.message || 'Manual water failed', true);
-      }
-    }
-
     async function togglePumpTest(publicId) {
       try {
         const res = await API.clusterTogglePumpTest(publicId);
@@ -1385,9 +1371,8 @@
            <div id="pairing-${esc(c.public_id)}" class="pairing-box" style="display:none;margin:0 1.25rem"></div>
            <div style="padding:.75rem 1.25rem;border-bottom:1px solid var(--border)">
              <div class="controls-title">Hardware Testing</div>
-             <p style="font-size:.78rem;color:var(--text-muted);margin:0 0 .65rem">Use these buttons to test if your pump/relay is working correctly.</p>
+             <p style="font-size:.78rem;color:var(--text-muted);margin:0 0 .65rem">Toggle pump on/off to test if your relay/hardware is working.</p>
              <div class="cluster-actions" style="margin-top:0">
-               ${c.has_device ? `<button type="button" class="btn btn-primary" onclick="manualWaterOnce('${esc(c.public_id)}')">💧 Manual water once</button>` : ''}
                ${c.has_device ? `<button type="button" class="btn ${c.pump_test_mode ? 'btn-danger' : 'btn-ghost'}" onclick="togglePumpTest('${esc(c.public_id)}')">${c.pump_test_mode ? '⛔ Pump test ON - Click to stop' : '⚙️ Pump test (off)'}</button>` : ''}
              </div>
            </div>

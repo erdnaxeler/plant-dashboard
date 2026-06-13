@@ -427,7 +427,6 @@ def _cluster_timer_payload(cluster: Cluster, now: Optional[datetime] = None) -> 
         ),
         "last_watering_ml": cluster.last_watering_ml,
         "next_watering_at": next_at.isoformat() if next_at else None,
-        "manual_water_trigger": bool(cluster.manual_water_trigger),
         "pump_test_mode": bool(cluster.pump_test_mode),
     }
 
@@ -441,17 +440,6 @@ def _cluster_timer_payload(cluster: Cluster, now: Optional[datetime] = None) -> 
         out["water_due"] = False
         out["run_segments_ms"] = []
         out["fault"] = None
-        return out
-
-    # Manual water trigger: deliver one dose immediately (doesn't affect schedule)
-    if cluster.manual_water_trigger:
-        ml_ev = _ml_per_event(cluster)
-        flow = _flow_ml_per_min_for_cluster(cluster)
-        segs = _run_segments_ms(ml_ev, flow) if ml_ev > 0 else []
-        out["water_due"] = True
-        out["run_segments_ms"] = segs
-        out["fault"] = None
-        out["flow_ml_per_min_assumed"] = flow
         return out
 
     if not cluster.watering_armed:
@@ -713,20 +701,6 @@ def device_timer_complete():
 
     db.session.commit()
     return jsonify({"ok": True, "last_watering_at": cluster.last_watering_at.isoformat()})
-
-
-@app.route("/api/device/timer/manual-complete", methods=["POST"])
-def device_timer_manual_complete():
-    """Device calls this after completing manual watering to clear the trigger."""
-    cluster = _cluster_from_bearer()
-    if not cluster:
-        return jsonify({"error": "Unauthorized"}), 401
-
-    # Clear the manual water trigger
-    cluster.manual_water_trigger = False
-    db.session.commit()
-    
-    return jsonify({"ok": True})
 
 
 @app.route("/api/app/chart")
@@ -1013,24 +987,6 @@ def api_cluster_clear_fault(public_id):
 
     c.device_status = "ok" if c.device_token else "not_paired"
     c.watering_armed = False
-    db.session.commit()
-    return jsonify(_serialize_cluster(c))
-
-
-@app.route("/api/app/clusters/<public_id>/manual-water", methods=["POST"])
-def api_cluster_manual_water(public_id):
-    """Trigger manual watering once (doesn't affect schedule or history)."""
-    if not _require_dashboard_auth():
-        return jsonify({"error": "Unauthorized"}), 401
-    c = Cluster.query.filter_by(public_id=public_id).first()
-    if not c:
-        return jsonify({"error": "not found"}), 404
-    if not c.is_calibrated:
-        return jsonify({"error": "cluster not calibrated"}), 400
-    if not c.device_token:
-        return jsonify({"error": "device not paired"}), 400
-
-    c.manual_water_trigger = True
     db.session.commit()
     return jsonify(_serialize_cluster(c))
 

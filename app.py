@@ -1056,6 +1056,78 @@ def api_cluster_delete(public_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/app/clusters/export", methods=["GET"])
+def api_clusters_export():
+    """Export all cluster data as JSON for backup."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    clusters = Cluster.query.all()
+    export_data = []
+    
+    for c in clusters:
+        logs = WateringLog.query.filter_by(cluster_ref=c.id).order_by(WateringLog.created_at.desc()).limit(100).all()
+        export_data.append({
+            "cluster": _serialize_cluster(c),
+            "watering_logs": [
+                {"ml": log.ml, "created_at": log.created_at.isoformat()} 
+                for log in logs
+            ]
+        })
+    
+    return jsonify({
+        "exported_at": _utc_now().isoformat(),
+        "clusters": export_data
+    })
+
+
+@app.route("/api/app/clusters/import", methods=["POST"])
+def api_clusters_import():
+    """Import cluster data from JSON backup."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    payload = request.get_json() or {}
+    clusters_data = payload.get("clusters", [])
+    
+    imported = 0
+    for item in clusters_data:
+        cluster_data = item.get("cluster", {})
+        
+        # Check if cluster already exists by public_id
+        existing = Cluster.query.filter_by(public_id=cluster_data.get("public_id")).first()
+        if existing:
+            continue
+        
+        # Create new cluster
+        c = Cluster(
+            public_id=cluster_data.get("public_id"),
+            name=cluster_data.get("name", "Imported Cluster"),
+            pot_size=cluster_data.get("pot_size"),
+            watering_group=cluster_data.get("watering_group"),
+            baseline_ml_per_week=cluster_data.get("baseline_ml_per_week"),
+            ml_volume_pct=cluster_data.get("ml_volume_pct", 100.0),
+            is_calibrated=cluster_data.get("is_calibrated", False),
+            watering_armed=cluster_data.get("watering_armed", False),
+            last_watering_at=datetime.fromisoformat(cluster_data["last_watering_at"]) if cluster_data.get("last_watering_at") else None,
+            last_watering_ml=cluster_data.get("last_watering_ml"),
+        )
+        db.session.add(c)
+        db.session.flush()
+        
+        # Add catalog plants
+        plant_ids = [p["id"] for p in cluster_data.get("catalog_plants", [])]
+        if plant_ids:
+            plants = CatalogPlant.query.filter(CatalogPlant.id.in_(plant_ids)).all()
+            for p in plants:
+                c.catalog_plants.append(p)
+        
+        imported += 1
+    
+    db.session.commit()
+    return jsonify({"ok": True, "imported_count": imported})
+
+
 @app.route("/api/app/settings", methods=["PUT"])
 def update_settings():
     if not _require_dashboard_auth():

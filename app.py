@@ -137,6 +137,10 @@ class Cluster(db.Model):
     last_watering_ml = db.Column(db.Float, nullable=True)
     # False until user taps "Start watering" in the app (calibrate, unpair, fault clear disarm).
     watering_armed = db.Column(db.Boolean, nullable=False, default=False)
+    # True when user triggers manual watering (device clears after executing)
+    manual_water_trigger = db.Column(db.Boolean, nullable=False, default=False)
+    # True when pump test mode is active (toggle on/off for hardware testing)
+    pump_test_mode = db.Column(db.Boolean, nullable=False, default=False)
     last_device_ping_at = db.Column(db.DateTime(timezone=True), nullable=True)
     created_at = db.Column(
         db.DateTime(timezone=True),
@@ -183,8 +187,10 @@ def _migrate_cluster_columns():
         if "cluster" not in insp.get_table_names():
             return
         col_names = {c["name"] for c in insp.get_columns("cluster")}
+        
+        dialect = db.engine.dialect.name
+        
         if "watering_armed" not in col_names:
-            dialect = db.engine.dialect.name
             if dialect == "postgresql":
                 db.session.execute(
                     text(
@@ -204,6 +210,40 @@ def _migrate_cluster_columns():
             Cluster.query.filter(Cluster.last_watering_at.isnot(None)).update(
                 {Cluster.watering_armed: True}, synchronize_session=False
             )
+            db.session.commit()
+        
+        if "manual_water_trigger" not in col_names:
+            if dialect == "postgresql":
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                        "manual_water_trigger BOOLEAN NOT NULL DEFAULT FALSE"
+                    )
+                )
+            else:
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN manual_water_trigger "
+                        "BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+            db.session.commit()
+        
+        if "pump_test_mode" not in col_names:
+            if dialect == "postgresql":
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                        "pump_test_mode BOOLEAN NOT NULL DEFAULT FALSE"
+                    )
+                )
+            else:
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN pump_test_mode "
+                        "BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
             db.session.commit()
     except Exception:
         db.session.rollback()
@@ -387,6 +427,8 @@ def _cluster_timer_payload(cluster: Cluster, now: Optional[datetime] = None) -> 
         ),
         "last_watering_ml": cluster.last_watering_ml,
         "next_watering_at": next_at.isoformat() if next_at else None,
+        "manual_water_trigger": bool(cluster.manual_water_trigger),
+        "pump_test_mode": bool(cluster.pump_test_mode),
     }
 
     if cluster.device_status == "fault_pump_max":
@@ -399,6 +441,17 @@ def _cluster_timer_payload(cluster: Cluster, now: Optional[datetime] = None) -> 
         out["water_due"] = False
         out["run_segments_ms"] = []
         out["fault"] = None
+        return out
+
+    # Manual water trigger: deliver one dose immediately (doesn't affect schedule)
+    if cluster.manual_water_trigger:
+        ml_ev = _ml_per_event(cluster)
+        flow = _flow_ml_per_min_for_cluster(cluster)
+        segs = _run_segments_ms(ml_ev, flow) if ml_ev > 0 else []
+        out["water_due"] = True
+        out["run_segments_ms"] = segs
+        out["fault"] = None
+        out["flow_ml_per_min_assumed"] = flow
         return out
 
     if not cluster.watering_armed:
@@ -622,9 +675,14 @@ def device_timer_state():
         return jsonify({"error": "Unauthorized"}), 401
 
     cluster.last_device_ping_at = _utc_now()
+    
+    # Clear manual_water_trigger after device retrieves it (one-time trigger)
+    payload = _cluster_timer_payload(cluster)
+    if cluster.manual_water_trigger and payload.get("manual_water_trigger"):
+        cluster.manual_water_trigger = False
+    
     db.session.commit()
 
-    payload = _cluster_timer_payload(cluster)
     return jsonify(payload)
 
 
@@ -945,6 +1003,40 @@ def api_cluster_clear_fault(public_id):
 
     c.device_status = "ok" if c.device_token else "not_paired"
     c.watering_armed = False
+    db.session.commit()
+    return jsonify(_serialize_cluster(c))
+
+
+@app.route("/api/app/clusters/<public_id>/manual-water", methods=["POST"])
+def api_cluster_manual_water(public_id):
+    """Trigger manual watering once (doesn't affect schedule or history)."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    c = Cluster.query.filter_by(public_id=public_id).first()
+    if not c:
+        return jsonify({"error": "not found"}), 404
+    if not c.is_calibrated:
+        return jsonify({"error": "cluster not calibrated"}), 400
+    if not c.device_token:
+        return jsonify({"error": "device not paired"}), 400
+
+    c.manual_water_trigger = True
+    db.session.commit()
+    return jsonify(_serialize_cluster(c))
+
+
+@app.route("/api/app/clusters/<public_id>/toggle-pump-test", methods=["POST"])
+def api_cluster_toggle_pump_test(public_id):
+    """Toggle pump test mode (on/off for hardware testing)."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    c = Cluster.query.filter_by(public_id=public_id).first()
+    if not c:
+        return jsonify({"error": "not found"}), 404
+    if not c.device_token:
+        return jsonify({"error": "device not paired"}), 400
+
+    c.pump_test_mode = not c.pump_test_mode
     db.session.commit()
     return jsonify(_serialize_cluster(c))
 

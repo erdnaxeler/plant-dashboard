@@ -788,10 +788,13 @@
       return { label: 'Healthy', cls: 'status-ok' };
     }
 
-    function formatTime(iso) {
+    function formatTime(iso, timezone) {
       if (!iso) return '—';
       const d = new Date(iso);
-      return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      if (!timezone || timezone === 'UTC') {
+        return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
+      }
+      return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: timezone });
     }
 
     function renderCard(p) {
@@ -1511,10 +1514,11 @@
 
       const showStartBtn = c.is_calibrated && !c.watering_armed && c.device_status !== 'fault_pump_max';
       const showPauseBtn = c.is_calibrated && c.watering_armed && c.device_status !== 'fault_pump_max';
+      const tz = c.timezone || 'UTC';
       const scheduleHint = !c.watering_armed
         ? 'Watering will not run until you tap <strong>Start watering</strong>.'
         : (c.last_watering_at
-          ? `Next slot (UTC): ${c.next_watering_at ? formatTime(c.next_watering_at) : '—'}`
+          ? `Next slot (${tz}): ${c.next_watering_at ? formatTime(c.next_watering_at, tz) : '—'}`
           : 'First watering runs on the next device check (within ~1 min).');
 
       const pairingHtml = c.is_calibrated

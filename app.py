@@ -1009,7 +1009,7 @@ def api_cluster_toggle_pump_test(public_id):
 
 @app.route("/api/app/clusters/<public_id>/log-manual-watering", methods=["POST"])
 def api_cluster_log_manual_watering(public_id):
-    """Manually log a watering event with the default ml_per_event amount."""
+    """Manually log a watering event with the default ml_per_event amount and reset the timer."""
     if not _require_dashboard_auth():
         return jsonify({"error": "Unauthorized"}), 401
     c = Cluster.query.filter_by(public_id=public_id).first()
@@ -1023,7 +1023,11 @@ def api_cluster_log_manual_watering(public_id):
         return jsonify({"error": "no watering amount configured"}), 400
 
     now = _utc_now()
+    # Log the watering event
     db.session.add(WateringLog(cluster_ref=c.id, ml=ml, created_at=now))
+    # Update last_watering_at to reset the timer (prevents double-watering)
+    c.last_watering_at = now
+    c.last_watering_ml = ml
     db.session.commit()
 
     return jsonify({"ok": True, "ml": ml, "logged_at": now.isoformat()})

@@ -1625,7 +1625,6 @@
           <div class="card-header">
             <div>
               <h2 contenteditable="true" id="cluster-name-${esc(c.public_id)}" style="outline:none;cursor:text" onblur="saveClusterName('${esc(c.public_id)}')" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">${esc(c.name)}</h2>
-              <div class="cluster-meta">${esc(c.public_id)}</div>
             </div>
             <span class="status-badge ${st.cls}"><span class="dot"></span>${st.label}</span>
           </div>

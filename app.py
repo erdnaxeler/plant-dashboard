@@ -662,7 +662,7 @@ def _serialize_cluster(c: Cluster) -> dict[str, Any]:
 
 @app.route("/")
 def home():
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("map_editor"))
 
 
 @app.route("/health")

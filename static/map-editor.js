@@ -1,12 +1,16 @@
 // Map Editor - Full-screen visual editor for plant dashboard
+// Refactored to use MapObjects and Connections API
 // Built with Fabric.js
 
 let canvas = null;
-let selectedTool = null;
-let clusterObjects = {}; // Map of cluster public_id -> fabric object
-let clusters = [];
+let mapObjects = []; // Array of MapObject data from API
+let connections = []; // Array of Connection data from API
+let objectShapes = {}; // Map of object_id -> fabric group
+let connectionLines = {}; // Map of connection_id -> fabric line
+let selectedTool = null; // 'plant' or 'waterer' or 'connection'
+let connectionMode = null; // { fromObjectId, tempLine } or null
 let zoomLevel = 1;
-let activeClusterId = null;
+let activeObjectId = null;
 
 // Auth helper
 function authHeaders(extra = {}) {
@@ -20,50 +24,70 @@ function authHeaders(extra = {}) {
 
 // API Methods
 const API = {
-  async getClusters() {
-    const res = await fetch('/api/app/clusters', { 
+  async getMapObjects() {
+    const res = await fetch('/api/app/map-objects', { 
       headers: authHeaders() 
     });
-    if (!res.ok) throw new Error('Failed to load clusters');
+    if (!res.ok) throw new Error('Failed to load map objects');
     return res.json();
   },
 
-  async createCluster(name) {
-    const res = await fetch('/api/app/clusters', {
+  async createMapObject(type, name, x, y) {
+    const res = await fetch('/api/app/map-objects', {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ name })
+      body: JSON.stringify({ type, name, x, y })
     });
-    if (!res.ok) throw new Error('Failed to create cluster');
+    if (!res.ok) throw new Error('Failed to create map object');
     return res.json();
   },
 
-  async updatePosition(publicId, x, y) {
-    const res = await fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/position`, {
+  async updateMapObject(id, data) {
+    const res = await fetch(`/api/app/map-objects/${id}`, {
       method: 'PUT',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ map_x: x, map_y: y })
+      body: JSON.stringify(data)
     });
-    if (!res.ok) throw new Error('Failed to update position');
+    if (!res.ok) throw new Error('Failed to update map object');
     return res.json();
   },
 
-  async renameCluster(publicId, name) {
-    const res = await fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/rename`, {
-      method: 'PUT',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ name })
-    });
-    if (!res.ok) throw new Error('Failed to rename');
-    return res.json();
-  },
-
-  async deleteCluster(publicId) {
-    const res = await fetch(`/api/app/clusters/${encodeURIComponent(publicId)}`, {
+  async deleteMapObject(id) {
+    const res = await fetch(`/api/app/map-objects/${id}`, {
       method: 'DELETE',
       headers: authHeaders()
     });
-    if (!res.ok) throw new Error('Failed to delete');
+    if (!res.ok) throw new Error('Failed to delete map object');
+    return res.json();
+  },
+
+  async getConnections() {
+    const res = await fetch('/api/app/connections', { 
+      headers: authHeaders() 
+    });
+    if (!res.ok) throw new Error('Failed to load connections');
+    return res.json();
+  },
+
+  async createConnection(fromObjectId, toObjectId) {
+    const res = await fetch('/api/app/connections', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ from_object_id: fromObjectId, to_object_id: toObjectId })
+    });
+    if (!res.ok) {
+      const errorData = await res.json();
+      throw new Error(errorData.error || 'Failed to create connection');
+    }
+    return res.json();
+  },
+
+  async deleteConnection(id) {
+    const res = await fetch(`/api/app/connections/${id}`, {
+      method: 'DELETE',
+      headers: authHeaders()
+    });
+    if (!res.ok) throw new Error('Failed to delete connection');
     return res.json();
   }
 };
@@ -71,11 +95,11 @@ const API = {
 // Toast notifications
 function toast(message, isError = false) {
   const container = document.getElementById('toastContainer');
-  const toast = document.createElement('div');
-  toast.className = 'toast' + (isError ? ' error' : '');
-  toast.textContent = message;
-  container.appendChild(toast);
-  setTimeout(() => toast.remove(), 3000);
+  const toastEl = document.createElement('div');
+  toastEl.className = 'toast' + (isError ? ' error' : '');
+  toastEl.textContent = message;
+  container.appendChild(toastEl);
+  setTimeout(() => toastEl.remove(), 3000);
 }
 
 // Initialize canvas
@@ -101,14 +125,14 @@ function initCanvas() {
 
   // Handle object selection
   canvas.on('selection:created', (e) => {
-    if (e.selected && e.selected[0] && e.selected[0].clusterId) {
-      selectCluster(e.selected[0].clusterId);
+    if (e.selected && e.selected[0] && e.selected[0].objectId) {
+      selectMapObject(e.selected[0].objectId);
     }
   });
 
   canvas.on('selection:updated', (e) => {
-    if (e.selected && e.selected[0] && e.selected[0].clusterId) {
-      selectCluster(e.selected[0].clusterId);
+    if (e.selected && e.selected[0] && e.selected[0].objectId) {
+      selectMapObject(e.selected[0].objectId);
     }
   });
 
@@ -119,17 +143,28 @@ function initCanvas() {
   // Handle object movement
   canvas.on('object:modified', async (e) => {
     const obj = e.target;
-    if (obj && obj.clusterId) {
-      await savePosition(obj.clusterId, obj.left, obj.top);
+    if (obj && obj.objectId) {
+      await savePosition(obj.objectId, obj.left, obj.top);
     }
   });
 
-  // Handle canvas click for adding objects
+  // Handle canvas click for adding objects or connections
   canvas.on('mouse:down', (e) => {
-    if (selectedTool && !e.target) {
-      const pointer = canvas.getPointer(e.e);
-      createObject(selectedTool, pointer.x, pointer.y);
-      clearToolSelection();
+    if (!e.target) {
+      // Clicked on empty canvas
+      if (selectedTool && selectedTool !== 'connection') {
+        const pointer = canvas.getPointer(e.e);
+        createObject(selectedTool, pointer.x, pointer.y);
+        clearToolSelection();
+      } else if (connectionMode) {
+        // Cancel connection mode
+        cancelConnectionMode();
+      }
+    } else if (e.target.objectId) {
+      // Clicked on an object
+      if (selectedTool === 'connection') {
+        handleConnectionClick(e.target.objectId);
+      }
     }
   });
 
@@ -172,7 +207,12 @@ function selectTool(type) {
   document.querySelectorAll('.tool-item').forEach(item => {
     item.classList.toggle('selected', item.dataset.type === type);
   });
-  toast(`Click on canvas to place ${type}`, false);
+  
+  if (type === 'connection') {
+    toast('Click on first object, then second object to connect', false);
+  } else {
+    toast(`Click on canvas to place ${type}`, false);
+  }
 }
 
 function clearToolSelection() {
@@ -180,24 +220,67 @@ function clearToolSelection() {
   document.querySelectorAll('.tool-item').forEach(item => {
     item.classList.remove('selected');
   });
+  cancelConnectionMode();
+}
+
+// Connection mode handling
+function handleConnectionClick(objectId) {
+  if (!connectionMode) {
+    // Start connection from this object
+    connectionMode = { fromObjectId: objectId, tempLine: null };
+    highlightObject(objectId, true);
+    toast('Now click on target object to complete connection', false);
+  } else if (connectionMode.fromObjectId === objectId) {
+    // Clicked same object - cancel
+    cancelConnectionMode();
+    toast('Connection cancelled', false);
+  } else {
+    // Complete connection
+    createConnectionBetween(connectionMode.fromObjectId, objectId);
+    cancelConnectionMode();
+    clearToolSelection();
+  }
+}
+
+function cancelConnectionMode() {
+  if (connectionMode) {
+    highlightObject(connectionMode.fromObjectId, false);
+    if (connectionMode.tempLine) {
+      canvas.remove(connectionMode.tempLine);
+    }
+    connectionMode = null;
+  }
+}
+
+function highlightObject(objectId, highlight) {
+  const shape = objectShapes[objectId];
+  if (shape && shape._objects && shape._objects[0]) {
+    const circle = shape._objects[0];
+    if (highlight) {
+      circle.set('strokeWidth', 6);
+      circle.set('stroke', '#007acc');
+    } else {
+      circle.set('strokeWidth', 4);
+      const obj = mapObjects.find(o => o.id === objectId);
+      if (obj) {
+        circle.set('stroke', getObjectStrokeColor(obj));
+      }
+    }
+    canvas.renderAll();
+  }
 }
 
 // Create object on canvas
 async function createObject(type, x, y) {
   try {
     const name = type === 'plant' ? 'New Plant' : 'New Waterer';
-    const cluster = await API.createCluster(name);
+    const mapObject = await API.createMapObject(type, name, x, y);
     
-    // Save position immediately
-    await API.updatePosition(cluster.public_id, x, y);
-    cluster.map_x = x;
-    cluster.map_y = y;
-    
-    // Add to clusters array
-    clusters.push(cluster);
+    // Add to local array
+    mapObjects.push(mapObject);
     
     // Render on canvas
-    renderCluster(cluster);
+    renderMapObject(mapObject);
     
     // Update layers
     updateLayers();
@@ -209,30 +292,58 @@ async function createObject(type, x, y) {
   }
 }
 
-// Render cluster on canvas
-function renderCluster(cluster) {
-  const x = cluster.map_x || 100;
-  const y = cluster.map_y || 100;
-  
-  // Determine color based on status
-  let fillColor = '#666666'; // gray = uncalibrated
-  let strokeColor = '#444444';
-  
-  if (cluster.is_calibrated) {
-    if (cluster.device_status === 'fault_pump_max') {
-      fillColor = '#f48771'; // red = fault
-      strokeColor = '#d66952';
-    } else if (cluster.watering_armed && cluster.has_device) {
-      fillColor = '#4ec9b0'; // green = armed & ready
-      strokeColor = '#3ba085';
-    } else if (cluster.has_device) {
-      fillColor = '#569cd6'; // blue = device connected
-      strokeColor = '#4179b3';
-    } else {
-      fillColor = '#dcdcaa'; // amber = needs pairing
-      strokeColor = '#b3b377';
-    }
+// Create connection between two objects
+async function createConnectionBetween(fromObjectId, toObjectId) {
+  try {
+    const connection = await API.createConnection(fromObjectId, toObjectId);
+    
+    // Add to local array
+    connections.push(connection);
+    
+    // Render on canvas
+    renderConnection(connection);
+    
+    // Reload objects to get updated cluster_id
+    await reloadMapObjects();
+    
+    toast('Connection created', false);
+  } catch (error) {
+    console.error('Failed to create connection:', error);
+    toast(error.message || 'Failed to create connection', true);
   }
+}
+
+// Get object color based on type and cluster status
+function getObjectFillColor(obj) {
+  if (obj.type === 'plant') {
+    return obj.cluster_id ? '#4ec9b0' : '#569cd6'; // green if in cluster, blue otherwise
+  } else if (obj.type === 'waterer') {
+    return obj.cluster_id ? '#c586c0' : '#dcdcaa'; // purple if in cluster, amber otherwise
+  }
+  return '#666666';
+}
+
+function getObjectStrokeColor(obj) {
+  if (obj.type === 'plant') {
+    return obj.cluster_id ? '#3ba085' : '#4179b3';
+  } else if (obj.type === 'waterer') {
+    return obj.cluster_id ? '#9d6b9a' : '#b3b377';
+  }
+  return '#444444';
+}
+
+function getObjectIcon(obj) {
+  return obj.type === 'plant' ? '🌱' : '💧';
+}
+
+// Render map object on canvas
+function renderMapObject(obj) {
+  const x = obj.map_x || 100;
+  const y = obj.map_y || 100;
+  
+  const fillColor = getObjectFillColor(obj);
+  const strokeColor = getObjectStrokeColor(obj);
+  const icon = getObjectIcon(obj);
   
   // Create circle
   const circle = new fabric.Circle({
@@ -257,8 +368,19 @@ function renderCluster(cluster) {
     })
   });
   
+  // Create icon (emoji)
+  const iconText = new fabric.Text(icon, {
+    left: x,
+    top: y - 10,
+    fontSize: 32,
+    originX: 'center',
+    originY: 'center',
+    selectable: false,
+    evented: false
+  });
+  
   // Create label
-  const label = new fabric.Text(cluster.name || 'Cluster', {
+  const label = new fabric.Text(obj.name || 'Object', {
     left: x,
     top: y + 55,
     fontSize: 14,
@@ -270,8 +392,8 @@ function renderCluster(cluster) {
     evented: false
   });
   
-  // Group circle and label
-  const group = new fabric.Group([circle, label], {
+  // Group circle, icon, and label
+  const group = new fabric.Group([circle, iconText, label], {
     left: x,
     top: y,
     hasControls: false,
@@ -281,46 +403,160 @@ function renderCluster(cluster) {
     lockScalingY: true
   });
   
-  group.clusterId = cluster.public_id;
+  group.objectId = obj.id;
   
   // Store reference
-  clusterObjects[cluster.public_id] = group;
+  objectShapes[obj.id] = group;
   
   // Add to canvas
   canvas.add(group);
   canvas.renderAll();
 }
 
-// Load all clusters
-async function loadClusters() {
-  try {
-    clusters = await API.getClusters();
-    
-    // Clear existing objects
-    canvas.getObjects().forEach(obj => {
-      if (obj.clusterId) {
-        canvas.remove(obj);
+// Render connection (line) on canvas
+function renderConnection(conn) {
+  const fromObj = mapObjects.find(o => o.id === conn.from_object_id);
+  const toObj = mapObjects.find(o => o.id === conn.to_object_id);
+  
+  if (!fromObj || !toObj) return;
+  
+  const fromX = fromObj.map_x || 100;
+  const fromY = fromObj.map_y || 100;
+  const toX = toObj.map_x || 100;
+  const toY = toObj.map_y || 100;
+  
+  const line = new fabric.Line([fromX, fromY, toX, toY], {
+    stroke: '#569cd6',
+    strokeWidth: 3,
+    selectable: false,
+    evented: true,
+    strokeDashArray: [5, 5],
+    opacity: 0.7
+  });
+  
+  line.connectionId = conn.id;
+  
+  // Store reference
+  connectionLines[conn.id] = line;
+  
+  // Add to canvas (send to back so it's behind objects)
+  canvas.add(line);
+  line.sendToBack();
+  
+  // Send grid to back
+  canvas.getObjects().forEach(obj => {
+    if (!obj.selectable && !obj.connectionId) {
+      obj.sendToBack();
+    }
+  });
+  
+  canvas.renderAll();
+}
+
+// Update connection positions when objects move
+function updateConnectionPositions(objectId) {
+  // Find all connections involving this object
+  const relatedConnections = connections.filter(
+    c => c.from_object_id === objectId || c.to_object_id === objectId
+  );
+  
+  relatedConnections.forEach(conn => {
+    const line = connectionLines[conn.id];
+    if (line) {
+      const fromObj = mapObjects.find(o => o.id === conn.from_object_id);
+      const toObj = mapObjects.find(o => o.id === conn.to_object_id);
+      
+      if (fromObj && toObj) {
+        line.set({
+          x1: fromObj.map_x || 100,
+          y1: fromObj.map_y || 100,
+          x2: toObj.map_x || 100,
+          y2: toObj.map_y || 100
+        });
       }
-    });
-    clusterObjects = {};
+    }
+  });
+  
+  canvas.renderAll();
+}
+
+// Load all map objects
+async function loadMapObjects() {
+  try {
+    mapObjects = await API.getMapObjects();
     
-    // Render each cluster
-    clusters.forEach(cluster => {
-      renderCluster(cluster);
+    // Clear existing object shapes
+    Object.values(objectShapes).forEach(shape => {
+      canvas.remove(shape);
+    });
+    objectShapes = {};
+    
+    // Render each object
+    mapObjects.forEach(obj => {
+      renderMapObject(obj);
     });
     
     updateLayers();
   } catch (error) {
-    console.error('Failed to load clusters:', error);
-    toast('Failed to load clusters', true);
+    console.error('Failed to load map objects:', error);
+    toast('Failed to load map objects', true);
   }
+}
+
+// Reload map objects (to get updated cluster_id after connection changes)
+async function reloadMapObjects() {
+  try {
+    mapObjects = await API.getMapObjects();
+    
+    // Update existing shapes with new colors
+    mapObjects.forEach(obj => {
+      const shape = objectShapes[obj.id];
+      if (shape && shape._objects && shape._objects[0]) {
+        const circle = shape._objects[0];
+        circle.set('fill', getObjectFillColor(obj));
+        circle.set('stroke', getObjectStrokeColor(obj));
+      }
+    });
+    
+    canvas.renderAll();
+    updateLayers();
+  } catch (error) {
+    console.error('Failed to reload map objects:', error);
+  }
+}
+
+// Load all connections
+async function loadConnections() {
+  try {
+    connections = await API.getConnections();
+    
+    // Clear existing connection lines
+    Object.values(connectionLines).forEach(line => {
+      canvas.remove(line);
+    });
+    connectionLines = {};
+    
+    // Render each connection
+    connections.forEach(conn => {
+      renderConnection(conn);
+    });
+  } catch (error) {
+    console.error('Failed to load connections:', error);
+    toast('Failed to load connections', true);
+  }
+}
+
+// Load all data
+async function loadAllData() {
+  await loadMapObjects();
+  await loadConnections();
 }
 
 // Update layers list
 function updateLayers() {
   const list = document.getElementById('layersList');
   
-  if (clusters.length === 0) {
+  if (mapObjects.length === 0) {
     list.innerHTML = `
       <div class="empty-state" style="padding: 24px 0;">
         <div style="font-size: 32px; opacity: 0.3;">📋</div>
@@ -330,155 +566,117 @@ function updateLayers() {
     return;
   }
   
-  list.innerHTML = clusters.map(cluster => {
-    let statusClass = 'gray';
-    
-    if (cluster.is_calibrated) {
-      if (cluster.device_status === 'fault_pump_max') {
-        statusClass = 'red';
-      } else if (cluster.watering_armed && cluster.has_device) {
-        statusClass = 'green';
-      } else if (cluster.has_device) {
-        statusClass = 'green';
-      } else {
-        statusClass = 'amber';
-      }
-    }
-    
-    const isActive = activeClusterId === cluster.public_id;
+  list.innerHTML = mapObjects.map(obj => {
+    const icon = getObjectIcon(obj);
+    const isActive = activeObjectId === obj.id;
+    const inCluster = obj.cluster_id ? 'green' : 'gray';
     
     return `
-      <div class="layer-item ${isActive ? 'active' : ''}" onclick="selectClusterFromLayer('${cluster.public_id}')">
-        <div class="layer-name">${escapeHtml(cluster.name)}</div>
-        <div class="layer-status ${statusClass}"></div>
+      <div class="layer-item ${isActive ? 'active' : ''}" onclick="selectMapObjectFromLayer(${obj.id})">
+        <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+          <span>${icon}</span>
+          <div class="layer-name">${escapeHtml(obj.name)}</div>
+        </div>
+        <div class="layer-status ${inCluster}"></div>
       </div>
     `;
   }).join('');
 }
 
-// Select cluster from layer click
-function selectClusterFromLayer(publicId) {
-  const obj = clusterObjects[publicId];
-  if (obj) {
-    canvas.setActiveObject(obj);
+// Select map object from layer click
+function selectMapObjectFromLayer(objectId) {
+  const shape = objectShapes[objectId];
+  if (shape) {
+    canvas.setActiveObject(shape);
     canvas.renderAll();
-    selectCluster(publicId);
+    selectMapObject(objectId);
   }
 }
 
-// Select cluster and show details panel
-function selectCluster(publicId) {
-  activeClusterId = publicId;
-  const cluster = clusters.find(c => c.public_id === publicId);
+// Select map object and show details panel
+function selectMapObject(objectId) {
+  activeObjectId = objectId;
+  const obj = mapObjects.find(o => o.id === objectId);
   
-  if (!cluster) return;
+  if (!obj) return;
   
   updateLayers();
-  showClusterPanel(cluster);
+  showObjectPanel(obj);
 }
 
-// Show cluster details in right panel
-function showClusterPanel(cluster) {
+// Show object details in right panel
+function showObjectPanel(obj) {
   const panel = document.getElementById('rightPanel');
   const title = document.getElementById('panelTitle');
   const content = document.getElementById('panelContent');
   
-  title.textContent = cluster.name || 'Cluster';
+  title.textContent = obj.name || 'Object';
   
-  // Determine status
-  let statusBadge = 'gray';
-  let statusText = 'Uncalibrated';
+  // Find connections for this object
+  const objConnections = connections.filter(
+    c => c.from_object_id === obj.id || c.to_object_id === obj.id
+  );
   
-  if (cluster.is_calibrated) {
-    if (cluster.device_status === 'fault_pump_max') {
-      statusBadge = 'red';
-      statusText = 'Fault';
-    } else if (cluster.watering_armed && cluster.has_device) {
-      statusBadge = 'green';
-      statusText = 'Active';
-    } else if (cluster.has_device) {
-      statusBadge = 'green';
-      statusText = 'Connected';
-    } else {
-      statusBadge = 'amber';
-      statusText = 'Needs Pairing';
-    }
-  }
+  const connectionsList = objConnections.map(conn => {
+    const otherObjId = conn.from_object_id === obj.id ? conn.to_object_id : conn.from_object_id;
+    const otherObj = mapObjects.find(o => o.id === otherObjId);
+    const otherIcon = otherObj ? getObjectIcon(otherObj) : '❓';
+    const otherName = otherObj ? otherObj.name : 'Unknown';
+    return `
+      <div class="property-row">
+        <span class="property-label">${otherIcon} ${escapeHtml(otherName)}</span>
+        <button class="btn-ghost" style="padding: 4px 8px; font-size: 11px; margin: 0; width: auto;" 
+          onclick="deleteConnectionFromPanel(${conn.id})">Delete</button>
+      </div>
+    `;
+  }).join('') || '<div style="font-size: 13px; color: var(--text-dim);">No connections</div>';
   
-  const plantsList = (cluster.catalog_plants || []).map(p => p.name).join(', ') || 'None';
+  const clusterInfo = obj.cluster_id 
+    ? `<div class="status-badge green"><div class="status-dot"></div>In Cluster #${obj.cluster_id}</div>`
+    : `<div class="status-badge gray"><div class="status-dot"></div>No Cluster</div>`;
   
   content.innerHTML = `
     <div class="panel-section">
-      <div class="panel-section-title">Status</div>
-      <div class="status-badge ${statusBadge}">
-        <div class="status-dot"></div>
-        ${statusText}
+      <div class="panel-section-title">Type</div>
+      <div style="font-size: 13px; color: var(--text);">
+        ${getObjectIcon(obj)} ${obj.type === 'plant' ? 'Plant' : 'Waterer'}
       </div>
+    </div>
+    
+    <div class="panel-section">
+      <div class="panel-section-title">Cluster Status</div>
+      ${clusterInfo}
     </div>
     
     <div class="panel-section">
       <div class="panel-section-title">Details</div>
       <div class="form-group">
         <label class="form-label">Name</label>
-        <input type="text" class="form-input" id="clusterName" value="${escapeHtml(cluster.name)}" 
-          onblur="updateClusterName('${cluster.public_id}')">
-      </div>
-      
-      <div class="property-row">
-        <span class="property-label">Calibrated</span>
-        <span class="property-value">${cluster.is_calibrated ? 'Yes' : 'No'}</span>
-      </div>
-      
-      ${cluster.is_calibrated ? `
-        <div class="property-row">
-          <span class="property-label">Pot Size</span>
-          <span class="property-value">${cluster.pot_size || '—'}</span>
-        </div>
-        
-        <div class="property-row">
-          <span class="property-label">Watering</span>
-          <span class="property-value">${cluster.watering_group || '—'}</span>
-        </div>
-        
-        <div class="property-row">
-          <span class="property-label">Water/Week</span>
-          <span class="property-value">${cluster.effective_ml_per_week || 0} ml</span>
-        </div>
-      ` : ''}
-      
-      <div class="property-row">
-        <span class="property-label">Device</span>
-        <span class="property-value">${cluster.has_device ? 'Paired' : 'Not paired'}</span>
+        <input type="text" class="form-input" id="objectName" value="${escapeHtml(obj.name)}" 
+          onblur="updateObjectName(${obj.id})">
       </div>
     </div>
     
-    ${cluster.is_calibrated ? `
-      <div class="panel-section">
-        <div class="panel-section-title">Plants</div>
-        <div style="font-size: 13px; color: var(--text); line-height: 1.6;">
-          ${plantsList}
-        </div>
-      </div>
-    ` : ''}
+    <div class="panel-section">
+      <div class="panel-section-title">Connections (${objConnections.length})</div>
+      ${connectionsList}
+    </div>
     
     <div class="panel-section">
       <div class="panel-section-title">Position</div>
       <div class="property-row">
         <span class="property-label">X</span>
-        <span class="property-value">${Math.round(cluster.map_x || 0)}</span>
+        <span class="property-value">${Math.round(obj.map_x || 0)}</span>
       </div>
       <div class="property-row">
         <span class="property-label">Y</span>
-        <span class="property-value">${Math.round(cluster.map_y || 0)}</span>
+        <span class="property-value">${Math.round(obj.map_y || 0)}</span>
       </div>
     </div>
     
     <div class="panel-section">
-      <button class="btn" onclick="openDashboard('${cluster.public_id}')">
-        Configure in Dashboard
-      </button>
-      <button class="btn btn-danger" onclick="deleteClusterFromMap('${cluster.public_id}')">
-        Delete Cluster
+      <button class="btn btn-danger" onclick="deleteMapObjectFromPanel(${obj.id})">
+        Delete ${obj.type === 'plant' ? 'Plant' : 'Waterer'}
       </button>
     </div>
   `;
@@ -490,36 +688,36 @@ function showClusterPanel(cluster) {
 function closePanel() {
   const panel = document.getElementById('rightPanel');
   panel.classList.add('hidden');
-  activeClusterId = null;
+  activeObjectId = null;
   canvas.discardActiveObject();
   canvas.renderAll();
   updateLayers();
 }
 
-// Update cluster name
-async function updateClusterName(publicId) {
-  const input = document.getElementById('clusterName');
+// Update object name
+async function updateObjectName(objectId) {
+  const input = document.getElementById('objectName');
   const newName = input.value.trim();
   
   if (!newName) {
     toast('Name cannot be empty', true);
-    await loadClusters();
+    await loadAllData();
     return;
   }
   
   try {
-    await API.renameCluster(publicId, newName);
+    await API.updateMapObject(objectId, { name: newName });
     
     // Update local data
-    const cluster = clusters.find(c => c.public_id === publicId);
-    if (cluster) {
-      cluster.name = newName;
+    const obj = mapObjects.find(o => o.id === objectId);
+    if (obj) {
+      obj.name = newName;
     }
     
     // Update canvas object
-    const obj = clusterObjects[publicId];
-    if (obj && obj._objects && obj._objects[1]) {
-      obj._objects[1].set('text', newName);
+    const shape = objectShapes[objectId];
+    if (shape && shape._objects && shape._objects[2]) {
+      shape._objects[2].set('text', newName);
       canvas.renderAll();
     }
     
@@ -532,16 +730,19 @@ async function updateClusterName(publicId) {
 }
 
 // Save position
-async function savePosition(publicId, x, y) {
+async function savePosition(objectId, x, y) {
   try {
-    await API.updatePosition(publicId, x, y);
+    await API.updateMapObject(objectId, { x, y });
     
     // Update local data
-    const cluster = clusters.find(c => c.public_id === publicId);
-    if (cluster) {
-      cluster.map_x = x;
-      cluster.map_y = y;
+    const obj = mapObjects.find(o => o.id === objectId);
+    if (obj) {
+      obj.map_x = x;
+      obj.map_y = y;
     }
+    
+    // Update connection positions
+    updateConnectionPositions(objectId);
   } catch (error) {
     console.error('Failed to save position:', error);
     toast('Failed to save position', true);
@@ -551,10 +752,10 @@ async function savePosition(publicId, x, y) {
 // Save all positions
 async function saveAllPositions() {
   try {
-    const promises = clusters.map(cluster => {
-      const obj = clusterObjects[cluster.public_id];
-      if (obj) {
-        return API.updatePosition(cluster.public_id, obj.left, obj.top);
+    const promises = mapObjects.map(obj => {
+      const shape = objectShapes[obj.id];
+      if (shape) {
+        return API.updateMapObject(obj.id, { x: shape.left, y: shape.top });
       }
       return Promise.resolve();
     });
@@ -567,43 +768,98 @@ async function saveAllPositions() {
   }
 }
 
-// Delete cluster
-async function deleteClusterFromMap(publicId) {
-  if (!confirm('Delete this cluster? This will remove it from the dashboard.')) {
+// Delete map object
+async function deleteMapObjectFromPanel(objectId) {
+  const obj = mapObjects.find(o => o.id === objectId);
+  const objType = obj ? (obj.type === 'plant' ? 'plant' : 'waterer') : 'object';
+  
+  if (!confirm(`Delete this ${objType}? This will also remove all its connections.`)) {
     return;
   }
   
   try {
-    await API.deleteCluster(publicId);
+    await API.deleteMapObject(objectId);
     
     // Remove from canvas
-    const obj = clusterObjects[publicId];
-    if (obj) {
-      canvas.remove(obj);
-      delete clusterObjects[publicId];
+    const shape = objectShapes[objectId];
+    if (shape) {
+      canvas.remove(shape);
+      delete objectShapes[objectId];
     }
     
-    // Remove from clusters array
-    clusters = clusters.filter(c => c.public_id !== publicId);
+    // Remove connections involving this object
+    const connToRemove = connections.filter(
+      c => c.from_object_id === objectId || c.to_object_id === objectId
+    );
+    connToRemove.forEach(conn => {
+      const line = connectionLines[conn.id];
+      if (line) {
+        canvas.remove(line);
+        delete connectionLines[conn.id];
+      }
+    });
     
-    // Close panel if this cluster was selected
-    if (activeClusterId === publicId) {
+    // Remove from local arrays
+    mapObjects = mapObjects.filter(o => o.id !== objectId);
+    connections = connections.filter(
+      c => c.from_object_id !== objectId && c.to_object_id !== objectId
+    );
+    
+    // Close panel if this object was selected
+    if (activeObjectId === objectId) {
       closePanel();
     }
     
     updateLayers();
     canvas.renderAll();
     
-    toast('Cluster deleted', false);
+    // Reload to get updated cluster assignments
+    await reloadMapObjects();
+    
+    toast(`${objType.charAt(0).toUpperCase() + objType.slice(1)} deleted`, false);
   } catch (error) {
-    console.error('Failed to delete cluster:', error);
-    toast('Failed to delete cluster', true);
+    console.error('Failed to delete object:', error);
+    toast('Failed to delete object', true);
   }
 }
 
-// Open dashboard to configure cluster
-function openDashboard(publicId) {
-  window.location.href = `/dashboard#cluster-${publicId}`;
+// Delete connection
+async function deleteConnectionFromPanel(connectionId) {
+  if (!confirm('Delete this connection? This may affect cluster formation.')) {
+    return;
+  }
+  
+  try {
+    await API.deleteConnection(connectionId);
+    
+    // Remove from canvas
+    const line = connectionLines[connectionId];
+    if (line) {
+      canvas.remove(line);
+      delete connectionLines[connectionId];
+    }
+    
+    // Remove from local array
+    connections = connections.filter(c => c.id !== connectionId);
+    
+    canvas.renderAll();
+    
+    // Reload objects to get updated cluster_id
+    await reloadMapObjects();
+    
+    // Refresh panel if an object is selected
+    if (activeObjectId) {
+      const obj = mapObjects.find(o => o.id === activeObjectId);
+      if (obj) {
+        showObjectPanel(obj);
+      }
+    }
+    
+    toast('Connection deleted', false);
+  } catch (error) {
+    console.error('Failed to delete connection:', error);
+    toast('Failed to delete connection', true);
+  }
 }
 
 // Zoom controls
@@ -638,5 +894,5 @@ function escapeHtml(text) {
 // Initialize on load
 document.addEventListener('DOMContentLoaded', async () => {
   initCanvas();
-  await loadClusters();
+  await loadAllData();
 });

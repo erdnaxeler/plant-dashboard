@@ -1409,6 +1409,327 @@ def map_editor():
     return render_template("map-editor.html")
 
 
+# ---------------- MAP OBJECTS & CONNECTIONS ----------------
+
+
+def _serialize_map_object(obj: MapObject) -> dict[str, Any]:
+    """Serialize a MapObject for API responses."""
+    return {
+        "id": obj.id,
+        "type": obj.type,
+        "name": obj.name,
+        "map_x": obj.map_x,
+        "map_y": obj.map_y,
+        "cluster_id": obj.cluster_id,
+        "created_at": obj.created_at.isoformat() if obj.created_at else None,
+        "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
+    }
+
+
+def _serialize_connection(conn: Connection) -> dict[str, Any]:
+    """Serialize a Connection for API responses."""
+    return {
+        "id": conn.id,
+        "from_object_id": conn.from_object_id,
+        "to_object_id": conn.to_object_id,
+        "created_at": conn.created_at.isoformat() if conn.created_at else None,
+    }
+
+
+def _find_connected_objects(waterer_id: int) -> tuple[Optional[MapObject], list[MapObject]]:
+    """
+    Find all objects connected to a waterer.
+    Returns (waterer, list_of_plants).
+    """
+    waterer = MapObject.query.filter_by(id=waterer_id, type="waterer").first()
+    if not waterer:
+        return None, []
+    
+    # Find all connections involving this waterer
+    connections = Connection.query.filter(
+        (Connection.from_object_id == waterer_id) | 
+        (Connection.to_object_id == waterer_id)
+    ).all()
+    
+    # Extract connected plant IDs
+    plant_ids = set()
+    for conn in connections:
+        other_id = conn.to_object_id if conn.from_object_id == waterer_id else conn.from_object_id
+        plant_ids.add(other_id)
+    
+    # Get all connected plants
+    plants = MapObject.query.filter(
+        MapObject.id.in_(plant_ids),
+        MapObject.type == "plant"
+    ).all() if plant_ids else []
+    
+    return waterer, plants
+
+
+def _update_cluster_from_connections(waterer_id: int) -> Optional[str]:
+    """
+    Update cluster assignments based on connections to a waterer.
+    Returns error message if validation fails, None on success.
+    """
+    waterer, plants = _find_connected_objects(waterer_id)
+    
+    if not waterer:
+        return "Waterer not found"
+    
+    # Clear cluster if no valid configuration
+    if len(plants) == 0 or len(plants) > 3:
+        # Clear cluster assignments for this waterer and its plants
+        if waterer.cluster_id:
+            cluster = Cluster.query.get(waterer.cluster_id)
+            if cluster:
+                # Clear cluster_id from all map objects
+                MapObject.query.filter_by(cluster_id=cluster.id).update(
+                    {MapObject.cluster_id: None}, synchronize_session=False
+                )
+                db.session.delete(cluster)
+        waterer.cluster_id = None
+        for plant in plants:
+            plant.cluster_id = None
+        db.session.commit()
+        return None
+    
+    # Valid configuration: 1 waterer + 1-3 plants
+    # Validate all plants have the same watering_group
+    # For now, we'll use a placeholder approach since plants don't yet have catalog_plant references
+    # This will be extended when the frontend allows assigning catalog plants to map objects
+    
+    # Create or update cluster
+    cluster = None
+    if waterer.cluster_id:
+        cluster = Cluster.query.get(waterer.cluster_id)
+    
+    if not cluster:
+        cluster = Cluster(
+            name=f"{waterer.name} Cluster",
+            is_calibrated=False,
+        )
+        db.session.add(cluster)
+        db.session.flush()
+    
+    # Assign cluster to waterer and all connected plants
+    waterer.cluster_id = cluster.id
+    for plant in plants:
+        plant.cluster_id = cluster.id
+    
+    db.session.commit()
+    return None
+
+
+@app.route("/api/app/map-objects", methods=["GET"])
+def api_map_objects_list():
+    """List all map objects."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    objects = MapObject.query.order_by(MapObject.created_at.asc()).all()
+    return jsonify([_serialize_map_object(obj) for obj in objects])
+
+
+@app.route("/api/app/map-objects", methods=["POST"])
+def api_map_objects_create():
+    """Create a new map object (plant or waterer)."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    payload = request.get_json() or {}
+    
+    obj_type = payload.get("type", "").strip().lower()
+    if obj_type not in ["plant", "waterer"]:
+        return jsonify({"error": "type must be 'plant' or 'waterer'"}), 400
+    
+    name = (payload.get("name") or f"{obj_type.capitalize()}").strip()
+    
+    try:
+        map_x = float(payload.get("x", 0))
+        map_y = float(payload.get("y", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid x or y coordinates"}), 400
+    
+    obj = MapObject(
+        type=obj_type,
+        name=name,
+        map_x=map_x,
+        map_y=map_y,
+    )
+    db.session.add(obj)
+    db.session.commit()
+    
+    return jsonify(_serialize_map_object(obj)), 201
+
+
+@app.route("/api/app/map-objects/<int:object_id>", methods=["PUT"])
+def api_map_objects_update(object_id):
+    """Update a map object's position and/or name."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    obj = MapObject.query.get(object_id)
+    if not obj:
+        return jsonify({"error": "not found"}), 404
+    
+    payload = request.get_json() or {}
+    
+    # Update name if provided
+    if "name" in payload:
+        name = (payload.get("name") or "Object").strip()
+        obj.name = name
+    
+    # Update position if provided
+    try:
+        if "x" in payload:
+            obj.map_x = float(payload["x"])
+        if "y" in payload:
+            obj.map_y = float(payload["y"])
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid x or y coordinates"}), 400
+    
+    db.session.commit()
+    return jsonify(_serialize_map_object(obj))
+
+
+@app.route("/api/app/map-objects/<int:object_id>", methods=["DELETE"])
+def api_map_objects_delete(object_id):
+    """Delete a map object and its connections."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    obj = MapObject.query.get(object_id)
+    if not obj:
+        return jsonify({"error": "not found"}), 404
+    
+    # Store cluster_id and type before deletion
+    cluster_id = obj.cluster_id
+    obj_type = obj.type
+    
+    # Delete all connections involving this object
+    Connection.query.filter(
+        (Connection.from_object_id == object_id) | 
+        (Connection.to_object_id == object_id)
+    ).delete(synchronize_session=False)
+    
+    # Delete the object
+    db.session.delete(obj)
+    db.session.commit()
+    
+    # If this was a waterer with a cluster, recalculate cluster assignments
+    if obj_type == "waterer" and cluster_id:
+        # The cluster is now orphaned, clean it up
+        cluster = Cluster.query.get(cluster_id)
+        if cluster:
+            MapObject.query.filter_by(cluster_id=cluster_id).update(
+                {MapObject.cluster_id: None}, synchronize_session=False
+            )
+            db.session.delete(cluster)
+            db.session.commit()
+    
+    return jsonify({"ok": True})
+
+
+@app.route("/api/app/connections", methods=["GET"])
+def api_connections_list():
+    """List all connections."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    connections = Connection.query.order_by(Connection.created_at.asc()).all()
+    return jsonify([_serialize_connection(conn) for conn in connections])
+
+
+@app.route("/api/app/connections", methods=["POST"])
+def api_connections_create():
+    """Create a connection between two map objects."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    payload = request.get_json() or {}
+    
+    try:
+        from_id = int(payload.get("from_object_id"))
+        to_id = int(payload.get("to_object_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid from_object_id or to_object_id"}), 400
+    
+    if from_id == to_id:
+        return jsonify({"error": "cannot connect object to itself"}), 400
+    
+    # Check if objects exist
+    from_obj = MapObject.query.get(from_id)
+    to_obj = MapObject.query.get(to_id)
+    
+    if not from_obj or not to_obj:
+        return jsonify({"error": "one or both objects not found"}), 404
+    
+    # Check if connection already exists (in either direction)
+    existing = Connection.query.filter(
+        ((Connection.from_object_id == from_id) & (Connection.to_object_id == to_id)) |
+        ((Connection.from_object_id == to_id) & (Connection.to_object_id == from_id))
+    ).first()
+    
+    if existing:
+        return jsonify({"error": "connection already exists"}), 400
+    
+    # Create connection
+    conn = Connection(
+        from_object_id=from_id,
+        to_object_id=to_id,
+    )
+    db.session.add(conn)
+    db.session.commit()
+    
+    # Update cluster assignments if either object is a waterer
+    waterer_id = None
+    if from_obj.type == "waterer":
+        waterer_id = from_id
+    elif to_obj.type == "waterer":
+        waterer_id = to_id
+    
+    if waterer_id:
+        error = _update_cluster_from_connections(waterer_id)
+        if error:
+            # Rollback connection if cluster validation fails
+            db.session.delete(conn)
+            db.session.commit()
+            return jsonify({"error": error}), 400
+    
+    return jsonify(_serialize_connection(conn)), 201
+
+
+@app.route("/api/app/connections/<int:connection_id>", methods=["DELETE"])
+def api_connections_delete(connection_id):
+    """Delete a connection."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    conn = Connection.query.get(connection_id)
+    if not conn:
+        return jsonify({"error": "not found"}), 404
+    
+    # Get objects before deletion
+    from_obj = MapObject.query.get(conn.from_object_id)
+    to_obj = MapObject.query.get(conn.to_object_id)
+    
+    # Delete connection
+    db.session.delete(conn)
+    db.session.commit()
+    
+    # Update cluster assignments if either object is a waterer
+    waterer_id = None
+    if from_obj and from_obj.type == "waterer":
+        waterer_id = from_obj.id
+    elif to_obj and to_obj.type == "waterer":
+        waterer_id = to_obj.id
+    
+    if waterer_id:
+        _update_cluster_from_connections(waterer_id)
+    
+    return jsonify({"ok": True})
+
+
 # ---------------- START ----------------
 
 _ensure_tables()

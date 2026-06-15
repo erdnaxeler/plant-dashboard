@@ -143,6 +143,8 @@ class Cluster(db.Model):
     pump_test_mode = db.Column(db.Boolean, nullable=False, default=False)
     # Preferred hour of day for watering in UTC (0-23), None = anytime
     preferred_watering_hour_utc = db.Column(db.Integer, nullable=True)
+    # User's timezone for display/input (e.g., "America/New_York"), defaults to UTC
+    timezone = db.Column(db.String(64), nullable=True, default="UTC")
     last_device_ping_at = db.Column(db.DateTime(timezone=True), nullable=True)
     created_at = db.Column(
         db.DateTime(timezone=True),
@@ -260,6 +262,22 @@ def _migrate_cluster_columns():
                 db.session.execute(
                     text(
                         "ALTER TABLE cluster ADD COLUMN preferred_watering_hour_utc INTEGER"
+                    )
+                )
+            db.session.commit()
+        
+        if "timezone" not in col_names:
+            if dialect == "postgresql":
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                        "timezone VARCHAR(64) DEFAULT 'UTC'"
+                    )
+                )
+            else:
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN timezone VARCHAR(64) DEFAULT 'UTC'"
                     )
                 )
             db.session.commit()
@@ -579,6 +597,7 @@ def _serialize_cluster(c: Cluster) -> dict[str, Any]:
         "watering_armed": bool(c.watering_armed),
         "pump_test_mode": bool(c.pump_test_mode),
         "preferred_watering_hour_utc": c.preferred_watering_hour_utc,
+        "timezone": c.timezone or "UTC",
         "next_watering_at": (
             _next_watering_at(c).isoformat() if _next_watering_at(c) else None
         ),
@@ -1116,6 +1135,27 @@ def api_cluster_preferred_hour(public_id):
         return jsonify({"error": "preferred_watering_hour_utc must be between 0 and 23"}), 400
     
     c.preferred_watering_hour_utc = hour
+    db.session.commit()
+    return jsonify(_serialize_cluster(c))
+
+
+@app.route("/api/app/clusters/<public_id>/timezone", methods=["PUT"])
+def api_cluster_timezone(public_id):
+    """Set the timezone for a cluster (for UI display purposes)."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    c = Cluster.query.filter_by(public_id=public_id).first()
+    if not c:
+        return jsonify({"error": "not found"}), 404
+
+    payload = request.get_json() or {}
+    tz = payload.get("timezone", "UTC").strip()
+    
+    # Basic validation - just check length
+    if len(tz) > 64:
+        return jsonify({"error": "timezone name too long"}), 400
+    
+    c.timezone = tz or "UTC"
     db.session.commit()
     return jsonify(_serialize_cluster(c))
 

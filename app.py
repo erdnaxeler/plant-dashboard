@@ -1007,6 +1007,28 @@ def api_cluster_toggle_pump_test(public_id):
     return jsonify(_serialize_cluster(c))
 
 
+@app.route("/api/app/clusters/<public_id>/log-manual-watering", methods=["POST"])
+def api_cluster_log_manual_watering(public_id):
+    """Manually log a watering event with the default ml_per_event amount."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    c = Cluster.query.filter_by(public_id=public_id).first()
+    if not c:
+        return jsonify({"error": "not found"}), 404
+    if not c.is_calibrated:
+        return jsonify({"error": "cluster not calibrated"}), 400
+
+    ml = _ml_per_event(c)
+    if ml <= 0:
+        return jsonify({"error": "no watering amount configured"}), 400
+
+    now = _utc_now()
+    db.session.add(WateringLog(cluster_ref=c.id, ml=ml, created_at=now))
+    db.session.commit()
+
+    return jsonify({"ok": True, "ml": ml, "logged_at": now.isoformat()})
+
+
 @app.route("/api/app/clusters/<public_id>", methods=["DELETE"])
 def api_cluster_delete(public_id):
     if not _require_dashboard_auth():

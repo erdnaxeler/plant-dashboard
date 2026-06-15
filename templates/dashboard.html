@@ -725,6 +725,10 @@
         method: 'POST',
         headers: authHeaders()
       }).then(r => r.json()),
+      clusterLogManualWatering: (publicId) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/log-manual-watering`, {
+        method: 'POST',
+        headers: authHeaders()
+      }).then(r => r.json()),
     };
 
     const charts = {};
@@ -1226,6 +1230,17 @@
       }
     }
 
+    async function logManualWatering(publicId) {
+      try {
+        const res = await API.clusterLogManualWatering(publicId);
+        if (res.error) throw new Error(res.error);
+        toast(`Manual watering logged: ${Number(res.ml || 0).toFixed(0)} ml`);
+        await loadDashboard();
+      } catch (e) {
+        toast(e.message || 'Failed to log watering', true);
+      }
+    }
+
     let clusterVolumeSaveTimers = {};
 
     async function saveClusterVolumePct(publicId, pct, silent) {
@@ -1405,6 +1420,9 @@
           </div>
         </div>
         <div class="card-chart"><canvas id="cchart-${esc(c.public_id)}"></canvas></div>
+        <div style="padding:.5rem 1.25rem .75rem;border-bottom:1px solid var(--border);text-align:center">
+          <button type="button" class="btn btn-primary" style="font-size:.75rem;padding:.4rem .8rem" onclick="logManualWatering('${esc(c.public_id)}')">💧 Log manual watering (${Number(c.ml_per_event || 0).toFixed(0)} ml)</button>
+        </div>
         <div class="card-controls">
           <div class="controls-title">Weekly water target (slider)</div>
           <div class="threshold-row">

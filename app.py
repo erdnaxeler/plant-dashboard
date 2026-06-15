@@ -177,6 +177,38 @@ class WateringLog(db.Model):
     )
 
 
+class MapObject(db.Model):
+    """Visual objects on the map editor canvas (plants and waterers)."""
+    
+    id = db.Column(db.Integer, primary_key=True)
+    type = db.Column(db.String(32), nullable=False, index=True)  # 'plant' or 'waterer'
+    name = db.Column(db.String(128), nullable=False, default="Object")
+    map_x = db.Column(db.Float, nullable=False, default=0.0)
+    map_y = db.Column(db.Float, nullable=False, default=0.0)
+    cluster_id = db.Column(db.Integer, db.ForeignKey("cluster.id"), nullable=True, index=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class Connection(db.Model):
+    """Lines connecting MapObjects on the canvas."""
+    
+    id = db.Column(db.Integer, primary_key=True)
+    from_object_id = db.Column(db.Integer, db.ForeignKey("map_object.id"), nullable=False, index=True)
+    to_object_id = db.Column(db.Integer, db.ForeignKey("map_object.id"), nullable=False, index=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
 # ---------------- HELPERS ----------------
 
 

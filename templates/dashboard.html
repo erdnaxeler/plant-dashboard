@@ -734,6 +734,11 @@
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ preferred_watering_hour_utc: hourUtc })
       }).then(r => r.json()),
+      clusterSetTimezone: (publicId, timezone) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/timezone`, {
+        method: 'PUT',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ timezone: timezone })
+      }).then(r => r.json()),
     };
 
     const charts = {};
@@ -1246,8 +1251,42 @@
       }
     }
 
+    const COMMON_TIMEZONES = [
+      'UTC',
+      'America/New_York',
+      'America/Chicago',
+      'America/Denver',
+      'America/Los_Angeles',
+      'America/Phoenix',
+      'America/Anchorage',
+      'Pacific/Honolulu',
+      'Europe/London',
+      'Europe/Paris',
+      'Europe/Berlin',
+      'Asia/Tokyo',
+      'Asia/Shanghai',
+      'Asia/Dubai',
+      'Australia/Sydney',
+    ];
+
+    async function setClusterTimezone(publicId) {
+      const select = document.getElementById(`tz-${publicId}`);
+      if (!select) return;
+      
+      const tz = select.value;
+      try {
+        const res = await API.clusterSetTimezone(publicId, tz);
+        if (res.error) throw new Error(res.error);
+        toast(`Timezone set to ${tz}`);
+        await loadDashboard();
+      } catch (e) {
+        toast(e.message || 'Failed to set timezone', true);
+      }
+    }
+
     async function setPreferredWateringTime(publicId) {
       const input = document.getElementById(`prefTime-${publicId}`);
+      const tzSelect = document.getElementById(`tz-${publicId}`);
       if (!input) return;
       
       const localTime = input.value; // Format: "HH:MM"
@@ -1264,28 +1303,85 @@
         return;
       }
       
-      // Convert local time to UTC hour
+      // Get cluster timezone
+      const c = clusterData.find(x => x.public_id === publicId);
+      const timezone = c?.timezone || 'UTC';
+      
+      // Convert local time to UTC hour using cluster's timezone
       const [hours, minutes] = localTime.split(':').map(Number);
-      const now = new Date();
-      const localDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes || 0);
-      const utcHour = localDate.getUTCHours();
+      const utcHour = localTimeToUTCHour(hours, minutes || 0, timezone);
       
       try {
         const res = await API.clusterSetPreferredHour(publicId, utcHour);
         if (res.error) throw new Error(res.error);
-        toast(`Preferred time set to ${localTime} (your time)`);
+        toast(`Preferred time set to ${localTime} ${timezone}`);
         await loadDashboard();
       } catch (e) {
         toast(e.message || 'Failed to set time', true);
       }
     }
 
-    function utcHourToLocalTime(utcHour) {
-      if (utcHour === null || utcHour === undefined) return '';
+    function localTimeToUTCHour(hours, minutes, timezone) {
+      // Create a date string in the given timezone
       const now = new Date();
-      const utcDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), utcHour, 0));
-      const localHours = utcDate.getHours();
-      return `${String(localHours).padStart(2, '0')}:00`;
+      const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
+      
+      // Parse with timezone offset
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+      });
+      
+      // Get offset by comparing UTC vs local
+      const utcDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes));
+      const parts = formatter.formatToParts(new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes));
+      
+      // Simple approach: create date in local, get UTC hours
+      // This assumes the date object's timezone methods work
+      const testDate = new Date(dateStr);
+      const utcHours = new Date(testDate.toLocaleString('en-US', { timeZone: 'UTC' })).getHours();
+      
+      // Fallback: manual calculation
+      try {
+        const localDate = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
+        const utcDateNow = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
+        const offset = (localDate - utcDateNow) / (1000 * 60 * 60);
+        return (hours - offset + 24) % 24;
+      } catch (e) {
+        // Fallback to browser timezone
+        return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes).getUTCHours();
+      }
+    }
+
+    function utcHourToLocalTime(utcHour, timezone) {
+      if (utcHour === null || utcHour === undefined) return '';
+      if (!timezone) timezone = 'UTC';
+      
+      try {
+        const now = new Date();
+        const utcDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), utcHour, 0));
+        
+        const formatter = new Intl.DateTimeFormat('en-US', {
+          timeZone: timezone,
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        });
+        
+        const formatted = formatter.format(utcDate);
+        return formatted;
+      } catch (e) {
+        // Fallback
+        const now = new Date();
+        const utcDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), utcHour, 0));
+        const localHours = utcDate.getHours();
+        return `${String(localHours).padStart(2, '0')}:00`;
+      }
     }
 
     let clusterVolumeSaveTimers = {};
@@ -1482,8 +1578,14 @@
         <div class="card-controls" style="border-top:1px solid var(--border)">
           <div class="controls-title">Preferred watering time (optional)</div>
           <div class="threshold-row">
-            <label for="prefTime-${esc(c.public_id)}">Your local time</label>
-            <input type="time" id="prefTime-${esc(c.public_id)}" value="${utcHourToLocalTime(c.preferred_watering_hour_utc)}" style="flex:1;padding:.4rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.85rem">
+            <label for="tz-${esc(c.public_id)}">Timezone</label>
+            <select id="tz-${esc(c.public_id)}" onchange="setClusterTimezone('${esc(c.public_id)}')" style="flex:1;padding:.4rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.85rem;background:var(--surface)">
+              ${COMMON_TIMEZONES.map(tz => `<option value="${esc(tz)}" ${(c.timezone || 'UTC') === tz ? 'selected' : ''}>${esc(tz)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="threshold-row">
+            <label for="prefTime-${esc(c.public_id)}">Time in ${esc(c.timezone || 'UTC')}</label>
+            <input type="time" id="prefTime-${esc(c.public_id)}" value="${utcHourToLocalTime(c.preferred_watering_hour_utc, c.timezone)}" style="flex:1;padding:.4rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.85rem">
             <button type="button" class="btn btn-ghost" style="font-size:.75rem;padding:.35rem .65rem" onclick="setPreferredWateringTime('${esc(c.public_id)}')">Set</button>
           </div>
           <p style="font-size:.72rem;color:var(--text-muted);margin-top:.35rem">${c.preferred_watering_hour_utc !== null && c.preferred_watering_hour_utc !== undefined ? `Waterings will happen at or after this time, respecting the minimum 50% interval.` : `Leave empty to water anytime the schedule allows.`}</p>

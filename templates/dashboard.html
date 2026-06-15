@@ -625,7 +625,6 @@
       <div class="section-head">
         <div>
           <h2>Timer clusters</h2>
-          <p>Create a cluster, calibrate pot size and plants, then pair your ESP32 with a one-time code (WiFi setup stays on the device for now).</p>
         </div>
         <button type="button" class="btn btn-primary" onclick="createCluster()">New cluster</button>
       </div>
@@ -1556,7 +1555,6 @@
         <div style="padding:.75rem 1.25rem;font-size:.8rem;color:var(--text-muted);border-bottom:1px solid var(--border)">
           Plants: ${plantsSummary}<br>
           <span style="display:block;margin-top:.35rem">${esc(c.status_message || '')}</span>
-          ${c.last_watering_at ? `<span style="display:block;margin-top:.25rem">Last watering: ${formatTime(c.last_watering_at)} · ${Number(c.last_watering_ml || 0).toFixed(0)} ml (UTC)</span>` : ''}
         </div>
         <div class="chart-toolbar">
           <span class="chart-toolbar-label">Water log</span>
@@ -1571,16 +1569,15 @@
           <button type="button" class="btn btn-primary" style="font-size:.75rem;padding:.4rem .8rem" onclick="logManualWatering('${esc(c.public_id)}')">💧 Log manual watering (${Number(c.ml_per_event || 0).toFixed(0)} ml)</button>
         </div>
         <div class="card-controls">
-          <div class="controls-title">Weekly water target (slider)</div>
+          <div class="controls-title">Weekly water target</div>
           <div class="threshold-row">
             <label for="mlVol-${esc(c.public_id)}">Volume vs table</label>
             <input type="range" id="mlVol-${esc(c.public_id)}" min="50" max="150" step="1" value="${c.ml_volume_pct}">
             <span class="val" id="mlVolVal-${esc(c.public_id)}">${Number(c.ml_volume_pct).toFixed(0)}%</span>
           </div>
-          <p style="font-size:.72rem;color:var(--text-muted);margin-top:.35rem">Each event ≈ ${Number(c.ml_per_event || 0).toFixed(0)} ml · UTC schedule · no catch-up · armed from app only.</p>
         </div>
         <div class="card-controls" style="border-top:1px solid var(--border)">
-          <div class="controls-title">Preferred watering time (optional)</div>
+          <div class="controls-title">Preferred watering time</div>
           <div class="threshold-row">
             <label for="tz-${esc(c.public_id)}">Timezone</label>
             <select id="tz-${esc(c.public_id)}" onchange="setClusterTimezone('${esc(c.public_id)}')" style="flex:1;padding:.4rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.85rem;background:var(--surface)">
@@ -1592,7 +1589,7 @@
             <input type="time" id="prefTime-${esc(c.public_id)}" value="${utcHourToLocalTime(c.preferred_watering_hour_utc, c.timezone)}" style="flex:1;padding:.4rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.85rem">
             <button type="button" class="btn btn-ghost" style="font-size:.75rem;padding:.35rem .65rem" onclick="setPreferredWateringTime('${esc(c.public_id)}')">Set</button>
           </div>
-          <p style="font-size:.72rem;color:var(--text-muted);margin-top:.35rem">${c.preferred_watering_hour_utc !== null && c.preferred_watering_hour_utc !== undefined ? `Waterings will happen at or after this time, respecting the minimum 50% interval.` : `Leave empty to water anytime the schedule allows.`}</p>
+          <p style="font-size:.72rem;color:var(--text-muted);margin-top:.35rem">${c.preferred_watering_hour_utc !== null && c.preferred_watering_hour_utc !== undefined ? `` : `Leave empty to water anytime the schedule allows.`}</p>
         </div>
         ${pairingHtml}` : '';
 

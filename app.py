@@ -453,11 +453,12 @@ def _next_watering_at(cluster: Cluster) -> Optional[datetime]:
     # Find next occurrence of preferred hour (in UTC)
     pref_hour = cluster.preferred_watering_hour_utc
     
-    # Start searching from last watering time
-    candidate = last.replace(hour=pref_hour, minute=0, second=0, microsecond=0)
+    # Start searching from NOW (not last watering time)
+    now = _utc_now()
+    candidate = now.replace(hour=pref_hour, minute=0, second=0, microsecond=0)
     
     # If we already passed the preferred hour today, start with tomorrow
-    if candidate <= last:
+    if candidate <= now:
         candidate += timedelta(days=1)
     
     # Keep advancing by days until we find a time that respects minimum interval

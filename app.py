@@ -146,6 +146,9 @@ class Cluster(db.Model):
     # User's timezone for display/input (e.g., "America/New_York"), defaults to UTC
     timezone = db.Column(db.String(64), nullable=True, default="UTC")
     last_device_ping_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    # Map view positioning
+    map_x = db.Column(db.Float, nullable=True)
+    map_y = db.Column(db.Float, nullable=True)
     created_at = db.Column(
         db.DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -278,6 +281,38 @@ def _migrate_cluster_columns():
                 db.session.execute(
                     text(
                         "ALTER TABLE cluster ADD COLUMN timezone VARCHAR(64) DEFAULT 'UTC'"
+                    )
+                )
+            db.session.commit()
+        
+        if "map_x" not in col_names:
+            if dialect == "postgresql":
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                        "map_x FLOAT"
+                    )
+                )
+            else:
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN map_x FLOAT"
+                    )
+                )
+            db.session.commit()
+        
+        if "map_y" not in col_names:
+            if dialect == "postgresql":
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                        "map_y FLOAT"
+                    )
+                )
+            else:
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN map_y FLOAT"
                     )
                 )
             db.session.commit()
@@ -617,6 +652,8 @@ def _serialize_cluster(c: Cluster) -> dict[str, Any]:
             c.last_device_ping_at.isoformat() if c.last_device_ping_at else None
         ),
         "catalog_plants": plants,
+        "map_x": c.map_x,
+        "map_y": c.map_y,
     }
 
 
@@ -1177,6 +1214,35 @@ def api_cluster_rename(public_id):
         return jsonify({"error": "name cannot be empty"}), 400
     
     c.name = name
+    db.session.commit()
+    return jsonify(_serialize_cluster(c))
+
+
+@app.route("/api/app/clusters/<public_id>/position", methods=["PUT"])
+def api_cluster_position(public_id):
+    """Update cluster position on map view."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    c = Cluster.query.filter_by(public_id=public_id).first()
+    if not c:
+        return jsonify({"error": "not found"}), 404
+
+    payload = request.get_json() or {}
+    
+    try:
+        x = payload.get("map_x")
+        y = payload.get("map_y")
+        
+        # Allow null to clear position
+        if x is None and y is None:
+            c.map_x = None
+            c.map_y = None
+        else:
+            c.map_x = float(x) if x is not None else c.map_x
+            c.map_y = float(y) if y is not None else c.map_y
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid map coordinates"}), 400
+    
     db.session.commit()
     return jsonify(_serialize_cluster(c))
 

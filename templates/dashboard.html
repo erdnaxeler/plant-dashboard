@@ -616,6 +616,7 @@
       Plant Dashboard
     </h1>
     <div class="header-actions">
+      <button type="button" class="btn btn-ghost btn-header" onclick="toggleView()"><span id="viewToggleText">📍 Map View</span></button>
       <button type="button" class="btn btn-primary btn-header" id="btnAddClusterHeader" onclick="createCluster()" title="Create a timer-based cluster (above soil moisture cards)">+ Timer cluster</button>
       <span class="header-meta" id="headerMeta"></span>
     </div>
@@ -631,6 +632,14 @@
       </div>
       <div id="clusterGrid" class="cluster-grid"></div>
     </section>
+
+    <div id="mapViewContainer" style="display:none;margin-bottom:2.25rem;padding:1rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);">
+      <div style="margin-bottom:1rem;">
+        <h2 style="font-size:1.05rem;font-weight:600;color:var(--green-dark);margin-bottom:.5rem;">Map View</h2>
+        <p style="font-size:.8rem;color:var(--text-muted);">Drag plants and devices to position them. Click to view details.</p>
+      </div>
+      <canvas id="mapCanvas" width="1000" height="600" style="border:1px solid var(--border);border-radius:8px;"></canvas>
+    </div>
 
     <h2 class="moisture-section-title">Soil moisture devices</h2>
 
@@ -1761,5 +1770,6 @@
       if (sessionStorage.getItem('dashToken')) loadDashboard();
     }, 60_000);
   </script>
+  <script src="/static/map-view.js"></script>
 </body>
 </html>

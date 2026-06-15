@@ -729,6 +729,11 @@
         method: 'POST',
         headers: authHeaders()
       }).then(r => r.json()),
+      clusterSetPreferredHour: (publicId, hourUtc) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/preferred-hour`, {
+        method: 'PUT',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ preferred_watering_hour_utc: hourUtc })
+      }).then(r => r.json()),
     };
 
     const charts = {};
@@ -1241,6 +1246,48 @@
       }
     }
 
+    async function setPreferredWateringTime(publicId) {
+      const input = document.getElementById(`prefTime-${publicId}`);
+      if (!input) return;
+      
+      const localTime = input.value; // Format: "HH:MM"
+      if (!localTime) {
+        // Clear the preference
+        try {
+          const res = await API.clusterSetPreferredHour(publicId, null);
+          if (res.error) throw new Error(res.error);
+          toast('Preferred time cleared - watering anytime');
+          await loadDashboard();
+        } catch (e) {
+          toast(e.message || 'Failed to update', true);
+        }
+        return;
+      }
+      
+      // Convert local time to UTC hour
+      const [hours, minutes] = localTime.split(':').map(Number);
+      const now = new Date();
+      const localDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes || 0);
+      const utcHour = localDate.getUTCHours();
+      
+      try {
+        const res = await API.clusterSetPreferredHour(publicId, utcHour);
+        if (res.error) throw new Error(res.error);
+        toast(`Preferred time set to ${localTime} (your time)`);
+        await loadDashboard();
+      } catch (e) {
+        toast(e.message || 'Failed to set time', true);
+      }
+    }
+
+    function utcHourToLocalTime(utcHour) {
+      if (utcHour === null || utcHour === undefined) return '';
+      const now = new Date();
+      const utcDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), utcHour, 0));
+      const localHours = utcDate.getHours();
+      return `${String(localHours).padStart(2, '0')}:00`;
+    }
+
     let clusterVolumeSaveTimers = {};
 
     async function saveClusterVolumePct(publicId, pct, silent) {
@@ -1431,6 +1478,15 @@
             <span class="val" id="mlVolVal-${esc(c.public_id)}">${Number(c.ml_volume_pct).toFixed(0)}%</span>
           </div>
           <p style="font-size:.72rem;color:var(--text-muted);margin-top:.35rem">Each event ≈ ${Number(c.ml_per_event || 0).toFixed(0)} ml · UTC schedule · no catch-up · armed from app only.</p>
+        </div>
+        <div class="card-controls" style="border-top:1px solid var(--border)">
+          <div class="controls-title">Preferred watering time (optional)</div>
+          <div class="threshold-row">
+            <label for="prefTime-${esc(c.public_id)}">Your local time</label>
+            <input type="time" id="prefTime-${esc(c.public_id)}" value="${utcHourToLocalTime(c.preferred_watering_hour_utc)}" style="flex:1;padding:.4rem .6rem;border:1px solid var(--border);border-radius:6px;font-size:.85rem">
+            <button type="button" class="btn btn-ghost" style="font-size:.75rem;padding:.35rem .65rem" onclick="setPreferredWateringTime('${esc(c.public_id)}')">Set</button>
+          </div>
+          <p style="font-size:.72rem;color:var(--text-muted);margin-top:.35rem">${c.preferred_watering_hour_utc !== null && c.preferred_watering_hour_utc !== undefined ? `Waterings will happen at or after this time, respecting the minimum 50% interval.` : `Leave empty to water anytime the schedule allows.`}</p>
         </div>
         ${pairingHtml}` : '';
 

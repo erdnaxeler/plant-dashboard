@@ -141,6 +141,8 @@ class Cluster(db.Model):
     manual_water_trigger = db.Column(db.Boolean, nullable=False, default=False)
     # True when pump test mode is active (toggle on/off for hardware testing)
     pump_test_mode = db.Column(db.Boolean, nullable=False, default=False)
+    # Preferred hour of day for watering in UTC (0-23), None = anytime
+    preferred_watering_hour_utc = db.Column(db.Integer, nullable=True)
     last_device_ping_at = db.Column(db.DateTime(timezone=True), nullable=True)
     created_at = db.Column(
         db.DateTime(timezone=True),
@@ -242,6 +244,22 @@ def _migrate_cluster_columns():
                     text(
                         "ALTER TABLE cluster ADD COLUMN pump_test_mode "
                         "BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+            db.session.commit()
+        
+        if "preferred_watering_hour_utc" not in col_names:
+            if dialect == "postgresql":
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                        "preferred_watering_hour_utc INTEGER"
+                    )
+                )
+            else:
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN preferred_watering_hour_utc INTEGER"
                     )
                 )
             db.session.commit()
@@ -393,12 +411,46 @@ def _run_segments_ms(ml_total: float, flow_ml_per_min: float) -> list[int]:
 
 
 def _next_watering_at(cluster: Cluster) -> Optional[datetime]:
+    """
+    Calculate next watering time using blended approach:
+    - If no preferred hour: simple interval from last watering
+    - If preferred hour set: find next preferred hour that respects 50% minimum interval
+    """
     if not cluster.watering_group or cluster.last_watering_at is None:
         return None
     last = _as_utc(cluster.last_watering_at)
     if last is None:
         return None
-    return last + _interval_for_group(cluster.watering_group)
+    
+    interval = _interval_for_group(cluster.watering_group)
+    
+    # No preferred hour: use simple interval
+    if cluster.preferred_watering_hour_utc is None:
+        return last + interval
+    
+    # Blended approach: preferred hour + minimum interval
+    min_interval = interval * 0.5  # 50% minimum
+    earliest_allowed = last + min_interval
+    
+    # Find next occurrence of preferred hour (in UTC)
+    pref_hour = cluster.preferred_watering_hour_utc
+    
+    # Start searching from last watering time
+    candidate = last.replace(hour=pref_hour, minute=0, second=0, microsecond=0)
+    
+    # If we already passed the preferred hour today, start with tomorrow
+    if candidate <= last:
+        candidate += timedelta(days=1)
+    
+    # Keep advancing by days until we find a time that respects minimum interval
+    max_iterations = 14  # Safety limit
+    for _ in range(max_iterations):
+        if candidate >= earliest_allowed:
+            return candidate
+        candidate += timedelta(days=1)
+    
+    # Fallback: just use minimum interval if something goes wrong
+    return earliest_allowed
 
 
 def _schedule_slot_due(cluster: Cluster, now: datetime) -> bool:
@@ -526,6 +578,7 @@ def _serialize_cluster(c: Cluster) -> dict[str, Any]:
         "is_calibrated": c.is_calibrated,
         "watering_armed": bool(c.watering_armed),
         "pump_test_mode": bool(c.pump_test_mode),
+        "preferred_watering_hour_utc": c.preferred_watering_hour_utc,
         "next_watering_at": (
             _next_watering_at(c).isoformat() if _next_watering_at(c) else None
         ),
@@ -1031,6 +1084,40 @@ def api_cluster_log_manual_watering(public_id):
     db.session.commit()
 
     return jsonify({"ok": True, "ml": ml, "logged_at": now.isoformat()})
+
+
+@app.route("/api/app/clusters/<public_id>/preferred-hour", methods=["PUT"])
+def api_cluster_preferred_hour(public_id):
+    """Set the preferred watering hour (in UTC). Set to null to disable time preference."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    c = Cluster.query.filter_by(public_id=public_id).first()
+    if not c:
+        return jsonify({"error": "not found"}), 404
+    if not c.is_calibrated:
+        return jsonify({"error": "cluster not calibrated"}), 400
+
+    payload = request.get_json() or {}
+    hour = payload.get("preferred_watering_hour_utc")
+    
+    # Allow null to clear the preference
+    if hour is None:
+        c.preferred_watering_hour_utc = None
+        db.session.commit()
+        return jsonify(_serialize_cluster(c))
+    
+    # Validate hour range
+    try:
+        hour = int(hour)
+    except (TypeError, ValueError):
+        return jsonify({"error": "preferred_watering_hour_utc must be an integer or null"}), 400
+    
+    if hour < 0 or hour > 23:
+        return jsonify({"error": "preferred_watering_hour_utc must be between 0 and 23"}), 400
+    
+    c.preferred_watering_hour_utc = hour
+    db.session.commit()
+    return jsonify(_serialize_cluster(c))
 
 
 @app.route("/api/app/clusters/<public_id>", methods=["DELETE"])

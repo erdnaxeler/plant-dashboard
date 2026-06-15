@@ -1372,6 +1372,11 @@ def dashboard():
     return render_template("dashboard.html")
 
 
+@app.route("/map-editor")
+def map_editor():
+    return render_template("map-editor.html")
+
+
 # ---------------- START ----------------
 
 _ensure_tables()

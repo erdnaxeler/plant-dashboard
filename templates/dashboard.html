@@ -738,6 +738,11 @@
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ timezone: timezone })
       }).then(r => r.json()),
+      clusterRename: (publicId, name) => fetch(`/api/app/clusters/${encodeURIComponent(publicId)}/rename`, {
+        method: 'PUT',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ name: name })
+      }).then(r => r.json()),
     };
 
     const charts = {};
@@ -1253,6 +1258,29 @@
       }
     }
 
+    async function saveClusterName(publicId) {
+      const nameEl = document.getElementById(`cluster-name-${publicId}`);
+      if (!nameEl) return;
+      const newName = nameEl.textContent.trim();
+      if (!newName) {
+        toast('Cluster name cannot be empty', true);
+        await loadDashboard();
+        return;
+      }
+      const c = clusterData.find(x => x.public_id === publicId);
+      if (c && newName === c.name) return; // No change
+      
+      try {
+        const res = await API.clusterRename(publicId, newName);
+        if (res.error) throw new Error(res.error);
+        toast('Cluster renamed');
+        await loadDashboard();
+      } catch (e) {
+        toast(e.message || 'Failed to rename', true);
+        await loadDashboard();
+      }
+    }
+
     const COMMON_TIMEZONES = [
       'UTC',
       'America/New_York',
@@ -1553,8 +1581,7 @@
           <div class="stat"><div class="stat-label">Target / week</div><div class="stat-value">${Number(c.effective_ml_per_week || 0).toFixed(0)} ml</div></div>
         </div>
         <div style="padding:.75rem 1.25rem;font-size:.8rem;color:var(--text-muted);border-bottom:1px solid var(--border)">
-          Plants: ${plantsSummary}<br>
-          <span style="display:block;margin-top:.35rem">${esc(c.status_message || '')}</span>
+          Plants: ${plantsSummary}
         </div>
         <div class="chart-toolbar">
           <span class="chart-toolbar-label">Water log</span>
@@ -1597,7 +1624,7 @@
         <div class="cluster-card" id="cluster-card-${esc(c.public_id)}">
           <div class="card-header">
             <div>
-              <h2>${esc(c.name)}</h2>
+              <h2 contenteditable="true" id="cluster-name-${esc(c.public_id)}" style="outline:none;cursor:text" onblur="saveClusterName('${esc(c.public_id)}')" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">${esc(c.name)}</h2>
               <div class="cluster-meta">${esc(c.public_id)}</div>
             </div>
             <span class="status-badge ${st.cls}"><span class="dot"></span>${st.label}</span>

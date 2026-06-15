@@ -1160,6 +1160,26 @@ def api_cluster_timezone(public_id):
     return jsonify(_serialize_cluster(c))
 
 
+@app.route("/api/app/clusters/<public_id>/rename", methods=["PUT"])
+def api_cluster_rename(public_id):
+    """Rename a cluster."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    c = Cluster.query.filter_by(public_id=public_id).first()
+    if not c:
+        return jsonify({"error": "not found"}), 404
+
+    payload = request.get_json() or {}
+    name = payload.get("name", "").strip()
+    
+    if not name:
+        return jsonify({"error": "name cannot be empty"}), 400
+    
+    c.name = name
+    db.session.commit()
+    return jsonify(_serialize_cluster(c))
+
+
 @app.route("/api/app/clusters/<public_id>", methods=["DELETE"])
 def api_cluster_delete(public_id):
     if not _require_dashboard_auth():

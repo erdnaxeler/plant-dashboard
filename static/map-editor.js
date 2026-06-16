@@ -6,14 +6,21 @@ let canvas = null;
 let mapObjects = []; // Array of MapObject data from API
 let connections = []; // Array of Connection data from API
 let objectShapes = {}; // Map of object_id -> fabric group
+let snapPoints = {}; // Map of object_id -> { n, s, e, w } snap point circles
 let connectionLines = {}; // Map of connection_id -> fabric line
+let connectionSnapData = {}; // Map of connection_id -> { fromSnap, toSnap }
 let selectedTool = null; // 'plant' or 'waterer' or 'connection'
 let connectionMode = null; // { fromObjectId, tempLine } or null
+let dragConnectionMode = null; // { fromObjectId, fromSnap, tempLine } or null
 let zoomLevel = 1;
 let activeObjectId = null;
 let clusters = []; // Array of cluster data
 let catalogPlants = []; // Array of catalog plants
 let clusterDraft = {}; // Draft cluster configuration
+
+// Constants
+const OBJECT_RADIUS = 40;
+const SNAP_POINT_RADIUS = 6;
 
 // Constants for cluster configuration
 const POT_SIZES = {
@@ -264,12 +271,22 @@ function initCanvas() {
         // Cancel connection mode
         cancelConnectionMode();
       }
-    } else if (e.target.objectId) {
+    } else if (e.target.objectId && !e.target.isSnapPoint) {
       // Clicked on an object
       if (selectedTool === 'connection') {
         handleConnectionClick(e.target.objectId);
       }
     }
+  });
+
+  // Handle mouse move for drag connection
+  canvas.on('mouse:move', (e) => {
+    handleDragConnectionMove(e);
+  });
+
+  // Handle mouse up for drag connection
+  canvas.on('mouse:up', (e) => {
+    handleDragConnectionUp(e);
   });
 
   // Handle window resize
@@ -417,6 +434,33 @@ async function createConnectionBetween(fromObjectId, toObjectId) {
   }
 }
 
+// Create connection between two objects with specific snap points
+async function createConnectionBetweenWithSnaps(fromObjectId, fromSnapDir, toObjectId, toSnapDir) {
+  try {
+    const connection = await API.createConnection(fromObjectId, toObjectId);
+    
+    // Store snap point data for this connection
+    connectionSnapData[connection.id] = {
+      fromSnap: fromSnapDir,
+      toSnap: toSnapDir
+    };
+    
+    // Add to local array
+    connections.push(connection);
+    
+    // Render on canvas with snap points
+    renderConnectionWithSnaps(connection, fromSnapDir, toSnapDir);
+    
+    // Reload objects to get updated cluster_id
+    await reloadMapObjects();
+    
+    toast('Connection created', false);
+  } catch (error) {
+    console.error('Failed to create connection:', error);
+    toast(error.message || 'Failed to create connection', true);
+  }
+}
+
 // Get object color based on type and cluster status
 function getObjectFillColor(obj) {
   if (obj.type === 'plant') {
@@ -440,6 +484,153 @@ function getObjectIcon(obj) {
   return obj.type === 'plant' ? '🌱' : '💧';
 }
 
+// Calculate snap point positions for an object
+function getSnapPointPositions(x, y) {
+  return {
+    n: { x: x, y: y - OBJECT_RADIUS },
+    s: { x: x, y: y + OBJECT_RADIUS },
+    e: { x: x + OBJECT_RADIUS, y: y },
+    w: { x: x - OBJECT_RADIUS, y: y }
+  };
+}
+
+// Create snap points for an object
+function createSnapPoints(objectId, x, y) {
+  const positions = getSnapPointPositions(x, y);
+  const points = {};
+  
+  ['n', 's', 'e', 'w'].forEach(dir => {
+    const pos = positions[dir];
+    const snapPoint = new fabric.Circle({
+      left: pos.x,
+      top: pos.y,
+      radius: SNAP_POINT_RADIUS,
+      fill: 'rgba(86, 156, 214, 0.3)',
+      stroke: '#569cd6',
+      strokeWidth: 2,
+      originX: 'center',
+      originY: 'center',
+      selectable: false,
+      evented: true,
+      opacity: 0.6,
+      hoverCursor: 'crosshair'
+    });
+    
+    snapPoint.objectId = objectId;
+    snapPoint.snapDirection = dir;
+    snapPoint.isSnapPoint = true;
+    
+    // Hover effects
+    snapPoint.on('mouseover', function() {
+      this.set({ opacity: 1, radius: SNAP_POINT_RADIUS + 2 });
+      canvas.renderAll();
+    });
+    
+    snapPoint.on('mouseout', function() {
+      if (!dragConnectionMode || dragConnectionMode.fromSnapPoint !== this) {
+        this.set({ opacity: 0.6, radius: SNAP_POINT_RADIUS });
+        canvas.renderAll();
+      }
+    });
+    
+    // Drag-to-connect functionality
+    snapPoint.on('mousedown', function(e) {
+      if (selectedTool === 'connection' || !selectedTool) {
+        startDragConnection(objectId, dir, e);
+      }
+    });
+    
+    points[dir] = snapPoint;
+    canvas.add(snapPoint);
+  });
+  
+  snapPoints[objectId] = points;
+}
+
+// Update snap point positions when object moves
+function updateSnapPointPositions(objectId, x, y) {
+  const points = snapPoints[objectId];
+  if (!points) return;
+  
+  const positions = getSnapPointPositions(x, y);
+  
+  ['n', 's', 'e', 'w'].forEach(dir => {
+    const pos = positions[dir];
+    points[dir].set({ left: pos.x, top: pos.y });
+  });
+}
+
+// Start drag connection from a snap point
+function startDragConnection(objectId, snapDir, event) {
+  const obj = mapObjects.find(o => o.id === objectId);
+  if (!obj) return;
+  
+  const snapPos = getSnapPointPositions(obj.map_x, obj.map_y)[snapDir];
+  
+  // Create temporary line
+  const tempLine = new fabric.Line([snapPos.x, snapPos.y, snapPos.x, snapPos.y], {
+    stroke: '#569cd6',
+    strokeWidth: 3,
+    strokeDashArray: [5, 5],
+    opacity: 0.5,
+    selectable: false,
+    evented: false
+  });
+  
+  canvas.add(tempLine);
+  
+  dragConnectionMode = {
+    fromObjectId: objectId,
+    fromSnapDir: snapDir,
+    fromSnapPoint: snapPoints[objectId][snapDir],
+    tempLine: tempLine
+  };
+  
+  // Highlight the starting snap point
+  snapPoints[objectId][snapDir].set({ opacity: 1, radius: SNAP_POINT_RADIUS + 2 });
+  canvas.renderAll();
+  
+  toast('Drag to a snap point on another object', false);
+}
+
+// Handle mouse move during drag connection
+function handleDragConnectionMove(e) {
+  if (!dragConnectionMode) return;
+  
+  const pointer = canvas.getPointer(e.e);
+  dragConnectionMode.tempLine.set({ x2: pointer.x, y2: pointer.y });
+  canvas.renderAll();
+}
+
+// Handle mouse up to complete drag connection
+function handleDragConnectionUp(e) {
+  if (!dragConnectionMode) return;
+  
+  const target = e.target;
+  
+  // Check if we released on a snap point
+  if (target && target.isSnapPoint && target.objectId !== dragConnectionMode.fromObjectId) {
+    const toObjectId = target.objectId;
+    const toSnapDir = target.snapDirection;
+    
+    // Create connection
+    createConnectionBetweenWithSnaps(
+      dragConnectionMode.fromObjectId,
+      dragConnectionMode.fromSnapDir,
+      toObjectId,
+      toSnapDir
+    );
+  } else {
+    toast('Connection cancelled', false);
+  }
+  
+  // Cleanup
+  canvas.remove(dragConnectionMode.tempLine);
+  dragConnectionMode.fromSnapPoint.set({ opacity: 0.6, radius: SNAP_POINT_RADIUS });
+  dragConnectionMode = null;
+  canvas.renderAll();
+}
+
 // Render map object on canvas
 function renderMapObject(obj) {
   const x = obj.map_x || 100;
@@ -453,7 +644,7 @@ function renderMapObject(obj) {
   const circle = new fabric.Circle({
     left: x,
     top: y,
-    radius: 40,
+    radius: OBJECT_RADIUS,
     fill: fillColor,
     stroke: strokeColor,
     strokeWidth: 4,
@@ -514,6 +705,10 @@ function renderMapObject(obj) {
   
   // Add to canvas
   canvas.add(group);
+  
+  // Create snap points for this object
+  createSnapPoints(obj.id, x, y);
+  
   canvas.renderAll();
 }
 
@@ -530,6 +725,47 @@ function renderConnection(conn) {
   const toY = toObj.map_y || 100;
   
   const line = new fabric.Line([fromX, fromY, toX, toY], {
+    stroke: '#569cd6',
+    strokeWidth: 3,
+    selectable: false,
+    evented: true,
+    strokeDashArray: [5, 5],
+    opacity: 0.7
+  });
+  
+  line.connectionId = conn.id;
+  
+  // Store reference
+  connectionLines[conn.id] = line;
+  
+  // Add to canvas (send to back so it's behind objects)
+  canvas.add(line);
+  line.sendToBack();
+  
+  // Send grid to back
+  canvas.getObjects().forEach(obj => {
+    if (!obj.selectable && !obj.connectionId) {
+      obj.sendToBack();
+    }
+  });
+  
+  canvas.renderAll();
+}
+
+// Render connection with specific snap points
+function renderConnectionWithSnaps(conn, fromSnapDir, toSnapDir) {
+  const fromObj = mapObjects.find(o => o.id === conn.from_object_id);
+  const toObj = mapObjects.find(o => o.id === conn.to_object_id);
+  
+  if (!fromObj || !toObj) return;
+  
+  const fromSnaps = getSnapPointPositions(fromObj.map_x, fromObj.map_y);
+  const toSnaps = getSnapPointPositions(toObj.map_x, toObj.map_y);
+  
+  const fromPos = fromSnaps[fromSnapDir];
+  const toPos = toSnaps[toSnapDir];
+  
+  const line = new fabric.Line([fromPos.x, fromPos.y, toPos.x, toPos.y], {
     stroke: '#569cd6',
     strokeWidth: 3,
     selectable: false,
@@ -577,6 +813,53 @@ function updateConnectionPositions(objectId) {
           x2: toObj.map_x || 100,
           y2: toObj.map_y || 100
         });
+      }
+    }
+  });
+  
+  canvas.renderAll();
+}
+
+// Update connection positions using snap point data when available
+function updateConnectionPositionsWithSnaps(objectId) {
+  // Find all connections involving this object
+  const relatedConnections = connections.filter(
+    c => c.from_object_id === objectId || c.to_object_id === objectId
+  );
+  
+  relatedConnections.forEach(conn => {
+    const line = connectionLines[conn.id];
+    if (line) {
+      const fromObj = mapObjects.find(o => o.id === conn.from_object_id);
+      const toObj = mapObjects.find(o => o.id === conn.to_object_id);
+      
+      if (fromObj && toObj) {
+        // Check if we have snap data for this connection
+        const snapData = connectionSnapData[conn.id];
+        
+        if (snapData) {
+          // Use snap point positions
+          const fromSnaps = getSnapPointPositions(fromObj.map_x, fromObj.map_y);
+          const toSnaps = getSnapPointPositions(toObj.map_x, toObj.map_y);
+          
+          const fromPos = fromSnaps[snapData.fromSnap];
+          const toPos = toSnaps[snapData.toSnap];
+          
+          line.set({
+            x1: fromPos.x,
+            y1: fromPos.y,
+            x2: toPos.x,
+            y2: toPos.y
+          });
+        } else {
+          // Fallback to center positions
+          line.set({
+            x1: fromObj.map_x || 100,
+            y1: fromObj.map_y || 100,
+            x2: toObj.map_x || 100,
+            y2: toObj.map_y || 100
+          });
+        }
       }
     }
   });
@@ -1020,8 +1303,11 @@ async function savePosition(objectId, x, y) {
       obj.map_y = y;
     }
     
+    // Update snap point positions
+    updateSnapPointPositions(objectId, x, y);
+    
     // Update connection positions
-    updateConnectionPositions(objectId);
+    updateConnectionPositionsWithSnaps(objectId);
   } catch (error) {
     console.error('Failed to save position:', error);
     toast('Failed to save position', true);
@@ -1066,6 +1352,17 @@ async function deleteMapObjectFromPanel(objectId) {
       delete objectShapes[objectId];
     }
     
+    // Remove snap points
+    const points = snapPoints[objectId];
+    if (points) {
+      ['n', 's', 'e', 'w'].forEach(dir => {
+        if (points[dir]) {
+          canvas.remove(points[dir]);
+        }
+      });
+      delete snapPoints[objectId];
+    }
+    
     // Remove connections involving this object
     const connToRemove = connections.filter(
       c => c.from_object_id === objectId || c.to_object_id === objectId
@@ -1076,6 +1373,8 @@ async function deleteMapObjectFromPanel(objectId) {
         canvas.remove(line);
         delete connectionLines[conn.id];
       }
+      // Clean up snap data for this connection
+      delete connectionSnapData[conn.id];
     });
     
     // Remove from local arrays

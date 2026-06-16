@@ -10,12 +10,13 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_from_directory,
     url_for,
 )
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import desc, inspect, text
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='frontend/dist', static_url_path='')
 
 
 def _database_url() -> str:
@@ -694,7 +695,19 @@ def _serialize_cluster(c: Cluster) -> dict[str, Any]:
 
 @app.route("/")
 def home():
-    return redirect(url_for("map_editor"))
+    """Serve React app for root and all non-API routes."""
+    return send_from_directory(app.static_folder, 'index.html')
+
+
+@app.route("/<path:path>")
+def catch_all(path):
+    """Catch-all route for React Router - serve index.html for non-API routes."""
+    # If path starts with 'api', let Flask handle it (404 or actual route)
+    if path.startswith('api/'):
+        return jsonify({"error": "not found"}), 404
+    
+    # For all other paths, serve the React app
+    return send_from_directory(app.static_folder, 'index.html')
 
 
 @app.route("/health")

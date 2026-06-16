@@ -696,6 +696,11 @@ def _serialize_cluster(c: Cluster) -> dict[str, Any]:
 @app.route("/")
 def home():
     """Serve React app for root and all non-API routes."""
+    import os
+    print(f"[DEBUG] static_folder: {app.static_folder}")
+    print(f"[DEBUG] static_folder exists: {os.path.exists(app.static_folder)}")
+    if os.path.exists(app.static_folder):
+        print(f"[DEBUG] Contents: {os.listdir(app.static_folder)}")
     return send_from_directory(app.static_folder, 'index.html')
 
 

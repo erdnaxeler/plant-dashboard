@@ -1412,16 +1412,6 @@ def update_settings():
     return jsonify({"ok": True})
 
 
-@app.route("/dashboard")
-def dashboard():
-    return render_template("dashboard.html")
-
-
-@app.route("/map-editor")
-def map_editor():
-    return render_template("map-editor.html")
-
-
 # ---------------- MAP OBJECTS & CONNECTIONS ----------------
 
 

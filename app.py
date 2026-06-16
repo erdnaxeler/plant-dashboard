@@ -458,7 +458,7 @@ def _next_watering_at(cluster: Cluster) -> Optional[datetime]:
     candidate = now.replace(hour=pref_hour, minute=0, second=0, microsecond=0)
     
     # If we already passed the preferred hour today, start with tomorrow
-    if candidate <= now:
+    if candidate < now:
         candidate += timedelta(days=1)
     
     # Keep advancing by days until we find a time that respects minimum interval

@@ -216,3 +216,13 @@
   font-size: 11px;
   color: var(--text-dim);
 }
+
+.info-box {
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--bg-light);
+  border-radius: 6px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-dim);
+}

@@ -311,6 +311,32 @@ export default function MapEditor() {
     return clusters.find(c => c.id === clusterId);
   }, [selectedNode, clusters]);
 
+  const getConnectedPlants = useCallback(() => {
+    if (!selectedNode || selectedNode.type !== 'waterer') return [];
+    
+    // Find all edges connected to this waterer
+    const connectedEdges = edges.filter(edge => 
+      edge.source === selectedNode.id || edge.target === selectedNode.id
+    );
+    
+    // Get plant node IDs from those edges
+    const plantNodeIds = connectedEdges.map(edge => 
+      edge.source === selectedNode.id ? edge.target : edge.source
+    );
+    
+    // Get the actual plant nodes
+    const plantNodes = nodes.filter(node => 
+      plantNodeIds.includes(node.id) && node.type === 'plant'
+    );
+    
+    // Return as plain objects with useful info
+    return plantNodes.map(node => ({
+      id: node.data.objectId,
+      name: node.data.label,
+      nodeId: node.id
+    }));
+  }, [selectedNode, edges, nodes]);
+
   const handleZoomIn = () => {
     if (reactFlowInstance) {
       reactFlowInstance.zoomIn();
@@ -339,6 +365,7 @@ export default function MapEditor() {
       <LeftPanel onAddNode={handleAddNode} />
       <PropertiesPanel 
         selectedNode={selectedNode}
+        connectedPlants={getConnectedPlants()}
         onDelete={handleDeleteNode}
         cluster={getNodeCluster()}
         onClusterUpdate={handleClusterUpdate}

@@ -1,0 +1,318 @@
+import React, { useState, useEffect } from 'react';
+import { MapObjectsAPI, ClustersAPI } from '../hooks/useApi';
+import './PropertiesPanel.css';
+
+const WATERING_GROUPS = {
+  daily: 'Daily (7x/week)',
+  twice_weekly: 'Twice Weekly (2x/week)',
+  weekly: 'Weekly (1x/week)'
+};
+
+export default function PlantPanel({ 
+  plantNode, 
+  cluster,
+  onUpdate,
+  onDelete 
+}) {
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editedName, setEditedName] = useState('');
+  const [preferredGroup, setPreferredGroup] = useState('daily');
+  const [wateringHistory, setWateringHistory] = useState([]);
+
+  useEffect(() => {
+    if (plantNode) {
+      setEditedName(plantNode.data.label);
+      // Load plant-specific preferences when available
+      // For now, we'll use placeholder data
+      setPreferredGroup(plantNode.data.preferredWateringGroup || 'daily');
+    }
+  }, [plantNode]);
+
+  useEffect(() => {
+    if (cluster) {
+      loadWateringHistory();
+    }
+  }, [cluster]);
+
+  const loadWateringHistory = async () => {
+    if (!cluster) return;
+    
+    try {
+      const response = await fetch(`/api/app/cluster/${cluster.public_id}/waterings`, {
+        headers: {
+          Authorization: `Bearer ${sessionStorage.getItem('dashToken')}`
+        }
+      });
+      const data = await response.json();
+      setWateringHistory(data.slice(0, 10)); // Last 10 waterings
+    } catch (error) {
+      console.error('Failed to load watering history:', error);
+    }
+  };
+
+  const handleSaveName = async () => {
+    if (!plantNode || !editedName.trim()) {
+      setIsEditingName(false);
+      return;
+    }
+
+    try {
+      await MapObjectsAPI.update(plantNode.data.objectId, { name: editedName.trim() });
+      setIsEditingName(false);
+      onUpdate();
+    } catch (error) {
+      console.error('Failed to update name:', error);
+      alert('Failed to update name');
+    }
+  };
+
+  const handlePreferredGroupChange = async (newGroup) => {
+    if (!plantNode) return;
+    
+    setPreferredGroup(newGroup);
+    
+    // TODO: Save to backend when MapObject model is extended with preferred_watering_group
+    // For now, just update local state
+    try {
+      // await MapObjectsAPI.update(plantNode.data.objectId, { preferred_watering_group: newGroup });
+      // onUpdate();
+      console.log('Preferred watering group would be saved:', newGroup);
+    } catch (error) {
+      console.error('Failed to update preferred watering group:', error);
+    }
+  };
+
+  if (!plantNode) {
+    return null;
+  }
+
+  const hasScheduleConflict = cluster && cluster.watering_group && 
+                               cluster.watering_group !== preferredGroup;
+
+  return (
+    <div className="properties-panel">
+      <div className="panel-header">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M3,13A9,9 0 0,0 12,22C12.5,22 12.97,21.96 13.42,21.88C13.15,21.32 13,20.68 13,20A7,7 0 0,1 20,13C20.68,13 21.32,13.15 21.88,13.42C21.96,12.97 22,12.5 22,12A9,9 0 0,0 13,3V12L7.5,6.5C5.08,8.14 3.43,10.89 3,14H3M23,20C23,22.21 21.21,24 19,24C18.23,24 17.5,23.77 16.89,23.36L13,21.07L16.89,18.78C17.5,18.37 18.23,18.14 19,18.14C21.21,18.14 23,19.93 23,22.14" />
+          </svg>
+          {isEditingName ? (
+            <input
+              type="text"
+              value={editedName}
+              onChange={(e) => setEditedName(e.target.value)}
+              onBlur={handleSaveName}
+              onKeyDown={(e) => e.key === 'Enter' && handleSaveName()}
+              autoFocus
+              style={{ 
+                flex: 1, 
+                fontSize: '16px', 
+                fontWeight: '600',
+                border: '1px solid #4a5568',
+                background: '#2d3748',
+                color: '#fff',
+                padding: '4px 8px',
+                borderRadius: '4px'
+              }}
+            />
+          ) : (
+            <h3 onClick={() => setIsEditingName(true)} style={{ cursor: 'pointer', margin: 0 }}>
+              {plantNode.data.label}
+            </h3>
+          )}
+        </div>
+        <button className="btn-icon" onClick={onDelete} title="Delete">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" />
+          </svg>
+        </button>
+      </div>
+
+      <div className="panel-content">
+        {/* Preferred Watering Schedule */}
+        <div className="property-group">
+          <label>Preferred Watering Schedule</label>
+          <select 
+            value={preferredGroup} 
+            onChange={(e) => handlePreferredGroupChange(e.target.value)}
+          >
+            {Object.entries(WATERING_GROUPS).map(([key, label]) => (
+              <option key={key} value={key}>{label}</option>
+            ))}
+          </select>
+          <small style={{ marginTop: '4px', display: 'block', color: '#a0aec0' }}>
+            This is the plant's ideal watering frequency
+          </small>
+        </div>
+
+        {/* Current Cluster Assignment */}
+        <div className="property-group">
+          <label>Current Cluster</label>
+          <div className="property-value">
+            {!cluster && (
+              <span style={{ color: '#a0aec0', fontSize: '14px' }}>
+                Not assigned to any cluster
+              </span>
+            )}
+            {cluster && (
+              <div>
+                <div style={{ fontWeight: '500' }}>{cluster.name}</div>
+                {cluster.is_calibrated && (
+                  <div style={{ fontSize: '14px', marginTop: '4px', color: '#a0aec0' }}>
+                    Current schedule: {WATERING_GROUPS[cluster.watering_group]}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Schedule Conflict Warning */}
+        {hasScheduleConflict && (
+          <div className="property-group">
+            <div style={{ 
+              padding: '12px', 
+              background: '#fc8181', 
+              color: '#1a202c',
+              borderRadius: '6px',
+              fontSize: '14px',
+              marginTop: '8px'
+            }}>
+              <strong>⚠️ Schedule Conflict</strong>
+              <div style={{ marginTop: '4px' }}>
+                This plant prefers <strong>{WATERING_GROUPS[preferredGroup]}</strong> but the 
+                cluster is set to <strong>{WATERING_GROUPS[cluster.watering_group]}</strong>.
+              </div>
+              <div style={{ marginTop: '6px', fontSize: '13px', opacity: 0.9 }}>
+                Consider moving this plant to a cluster with matching schedule or adjusting its preference.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Watering History */}
+        {cluster && (
+          <>
+            <div className="divider"></div>
+            
+            <div className="property-group">
+              <label>Recent Watering History</label>
+              {wateringHistory.length === 0 && (
+                <div className="property-value" style={{ fontSize: '14px', color: '#a0aec0' }}>
+                  No watering events yet
+                </div>
+              )}
+              {wateringHistory.length > 0 && (
+                <div style={{ marginTop: '8px' }}>
+                  {/* Simple chart visualization */}
+                  <div style={{ 
+                    display: 'flex', 
+                    flexDirection: 'column', 
+                    gap: '6px',
+                    maxHeight: '200px',
+                    overflowY: 'auto'
+                  }}>
+                    {wateringHistory.map((event, idx) => (
+                      <div 
+                        key={idx}
+                        style={{ 
+                          display: 'flex', 
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '8px',
+                          background: '#2d3748',
+                          borderRadius: '4px',
+                          fontSize: '13px'
+                        }}
+                      >
+                        <span>{new Date(event.created_at).toLocaleDateString()}</span>
+                        <span style={{ fontWeight: '600', color: '#4ec9b0' }}>
+                          {event.ml} ml
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Simple bar chart */}
+                  <div style={{ marginTop: '16px' }}>
+                    <div style={{ fontSize: '12px', color: '#a0aec0', marginBottom: '8px' }}>
+                      Volume Distribution
+                    </div>
+                    <div style={{ 
+                      display: 'flex', 
+                      alignItems: 'flex-end', 
+                      gap: '4px',
+                      height: '80px',
+                      borderBottom: '1px solid #4a5568',
+                      paddingBottom: '4px'
+                    }}>
+                      {wateringHistory.slice(0, 7).reverse().map((event, idx) => {
+                        const maxMl = Math.max(...wateringHistory.map(e => e.ml));
+                        const height = (event.ml / maxMl) * 100;
+                        return (
+                          <div
+                            key={idx}
+                            style={{
+                              flex: 1,
+                              height: `${height}%`,
+                              background: '#4ec9b0',
+                              borderRadius: '2px 2px 0 0',
+                              minHeight: '4px',
+                              position: 'relative'
+                            }}
+                            title={`${event.ml} ml on ${new Date(event.created_at).toLocaleDateString()}`}
+                          />
+                        );
+                      })}
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#718096', marginTop: '4px', textAlign: 'center' }}>
+                      Last 7 waterings
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Cluster Info */}
+        {cluster && cluster.is_calibrated && (
+          <>
+            <div className="divider"></div>
+            
+            <div className="property-group">
+              <label>Cluster Details</label>
+              <div style={{ fontSize: '14px', color: '#a0aec0', lineHeight: '1.6' }}>
+                <div>Pot size: {cluster.pot_size}</div>
+                <div>Volume: {cluster.ml_per_event} ml per event</div>
+                {cluster.next_watering_at && (
+                  <div>Next watering: {new Date(cluster.next_watering_at).toLocaleString()}</div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Instructions */}
+        {!cluster && (
+          <div style={{ 
+            marginTop: '16px',
+            padding: '12px',
+            background: '#2d3748',
+            borderRadius: '6px',
+            fontSize: '14px',
+            color: '#a0aec0',
+            lineHeight: '1.5'
+          }}>
+            <strong style={{ color: '#fff' }}>To add this plant to a cluster:</strong>
+            <ol style={{ margin: '8px 0 0 0', paddingLeft: '20px' }}>
+              <li>Connect this plant to a waterer</li>
+              <li>The waterer will create a cluster</li>
+              <li>Configure the cluster in the waterer panel</li>
+            </ol>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

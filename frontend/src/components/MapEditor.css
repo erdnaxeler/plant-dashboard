@@ -1,0 +1,18 @@
+.map-editor {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+}
+
+.canvas-container {
+  position: absolute;
+  top: 48px;
+  left: 240px;
+  right: 320px;
+  bottom: 0;
+  background: var(--bg-dark);
+}
+
+.react-flow__attribution {
+  display: none;
+}

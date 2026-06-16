@@ -1,0 +1,76 @@
+.left-panel {
+  position: fixed;
+  left: 0;
+  top: 48px;
+  bottom: 0;
+  width: 240px;
+  background: var(--bg-medium);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  z-index: 100;
+}
+
+.panel-section {
+  padding: 16px;
+}
+
+.panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+  letter-spacing: 0.5px;
+}
+
+.tools-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.tool-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 12px;
+  background: var(--bg-light);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  cursor: grab;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.tool-item:active {
+  cursor: grabbing;
+}
+
+.tool-item:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.plant-tool svg {
+  color: var(--green);
+}
+
+.waterer-tool svg {
+  color: var(--blue);
+}
+
+.tool-item span {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.panel-hint {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: center;
+  font-style: italic;
+}

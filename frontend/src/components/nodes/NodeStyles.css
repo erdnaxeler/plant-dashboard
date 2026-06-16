@@ -1,0 +1,73 @@
+.custom-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.node-circle {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 3px solid;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.plant-node .node-circle {
+  background: #2d5a2d;
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.waterer-node .node-circle {
+  background: #2d4a5a;
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.custom-node:hover .node-circle {
+  transform: scale(1.05);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+}
+
+.custom-node.selected .node-circle {
+  border-width: 4px;
+  box-shadow: 0 0 0 3px rgba(78, 201, 176, 0.3);
+}
+
+.node-label {
+  margin-top: 8px;
+  padding: 4px 12px;
+  background: var(--bg-medium);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.react-flow__handle {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--bg-dark);
+  background: var(--accent);
+  transition: all 0.2s ease;
+}
+
+.react-flow__handle:hover {
+  background: var(--green);
+  transform: scale(1.2);
+}
+
+.react-flow__handle-top { top: -7px; }
+.react-flow__handle-bottom { bottom: -7px; }
+.react-flow__handle-left { left: -7px; }
+.react-flow__handle-right { right: -7px; }

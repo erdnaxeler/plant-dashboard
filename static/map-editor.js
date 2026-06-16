@@ -11,6 +11,25 @@ let selectedTool = null; // 'plant' or 'waterer' or 'connection'
 let connectionMode = null; // { fromObjectId, tempLine } or null
 let zoomLevel = 1;
 let activeObjectId = null;
+let clusters = []; // Array of cluster data
+let catalogPlants = []; // Array of catalog plants
+let clusterDraft = {}; // Draft cluster configuration
+
+// Constants for cluster configuration
+const POT_SIZES = {
+  '5.5x4.5': '5.5" × 4.5"',
+  '8x7': '8" × 7"',
+  '9.5x8.5': '9.5" × 8.5"',
+  '12x11': '12" × 11"'
+};
+const POT_KEYS = Object.keys(POT_SIZES);
+
+function groupLabel(g) {
+  if (g === 'daily') return 'Daily';
+  if (g === 'twice_weekly') return '2× / week';
+  if (g === 'weekly') return 'Weekly';
+  return g || '—';
+}
 
 // Auth helper
 function authHeaders(extra = {}) {
@@ -88,6 +107,91 @@ const API = {
       headers: authHeaders()
     });
     if (!res.ok) throw new Error('Failed to delete connection');
+    return res.json();
+  },
+
+  // Cluster API methods
+  async getClusters() {
+    const res = await fetch('/api/app/clusters', { headers: authHeaders() });
+    if (!res.ok) throw new Error('Failed to load clusters');
+    return res.json();
+  },
+
+  async getCluster(publicId) {
+    const res = await fetch(`/api/app/clusters/${publicId}`, { headers: authHeaders() });
+    if (!res.ok) throw new Error('Failed to load cluster');
+    return res.json();
+  },
+
+  async getCatalogPlants() {
+    const res = await fetch('/api/app/catalog-plants', { headers: authHeaders() });
+    if (!res.ok) throw new Error('Failed to load catalog plants');
+    return res.json();
+  },
+
+  async clusterCalibrate(publicId, potSize, catalogPlantIds) {
+    const res = await fetch(`/api/app/clusters/${publicId}/calibrate`, {
+      method: 'PUT',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ pot_size: potSize, catalog_plant_ids: catalogPlantIds })
+    });
+    if (!res.ok) throw new Error('Failed to calibrate cluster');
+    return res.json();
+  },
+
+  async clusterRename(publicId, name) {
+    const res = await fetch(`/api/app/clusters/${publicId}/rename`, {
+      method: 'PUT',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ name })
+    });
+    if (!res.ok) throw new Error('Failed to rename cluster');
+    return res.json();
+  },
+
+  async clusterPairingCode(publicId) {
+    const res = await fetch(`/api/app/clusters/${publicId}/pairing-code`, {
+      method: 'POST',
+      headers: authHeaders()
+    });
+    if (!res.ok) throw new Error('Failed to get pairing code');
+    return res.json();
+  },
+
+  async clusterUnpair(publicId) {
+    const res = await fetch(`/api/app/clusters/${publicId}/unpair`, {
+      method: 'POST',
+      headers: authHeaders()
+    });
+    if (!res.ok) throw new Error('Failed to unpair cluster');
+    return res.json();
+  },
+
+  async clusterStartWatering(publicId) {
+    const res = await fetch(`/api/app/clusters/${publicId}/start-watering`, {
+      method: 'POST',
+      headers: authHeaders()
+    });
+    if (!res.ok) throw new Error('Failed to start watering');
+    return res.json();
+  },
+
+  async clusterPauseWatering(publicId) {
+    const res = await fetch(`/api/app/clusters/${publicId}/pause-watering`, {
+      method: 'POST',
+      headers: authHeaders()
+    });
+    if (!res.ok) throw new Error('Failed to pause watering');
+    return res.json();
+  },
+
+  async clusterSetVolume(publicId, mlVolumePct) {
+    const res = await fetch(`/api/app/clusters/${publicId}/volume`, {
+      method: 'PUT',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ ml_volume_pct: mlVolumePct })
+    });
+    if (!res.ok) throw new Error('Failed to set volume');
     return res.json();
   }
 };
@@ -550,6 +654,12 @@ async function loadConnections() {
 async function loadAllData() {
   await loadMapObjects();
   await loadConnections();
+  try {
+    clusters = await API.getClusters();
+    catalogPlants = await API.getCatalogPlants();
+  } catch (error) {
+    console.error('Failed to load clusters/catalog:', error);
+  }
 }
 
 // Update layers list
@@ -605,11 +715,21 @@ function selectMapObject(objectId) {
 }
 
 // Show object details in right panel
-function showObjectPanel(obj) {
+async function showObjectPanel(obj) {
   const panel = document.getElementById('rightPanel');
   const title = document.getElementById('panelTitle');
   const content = document.getElementById('panelContent');
   
+  // If this is a waterer with a cluster, show cluster configuration
+  if (obj.type === 'waterer' && obj.cluster_id) {
+    const cluster = clusters.find(c => c.id === obj.cluster_id);
+    if (cluster) {
+      await showClusterPanel(obj, cluster);
+      return;
+    }
+  }
+  
+  // Otherwise show standard object panel
   title.textContent = obj.name || 'Object';
   
   // Find connections for this object
@@ -635,6 +755,15 @@ function showObjectPanel(obj) {
     ? `<div class="status-badge green"><div class="status-dot"></div>In Cluster #${obj.cluster_id}</div>`
     : `<div class="status-badge gray"><div class="status-dot"></div>No Cluster</div>`;
   
+  // For waterers without clusters, show hint about connecting plants
+  const watererHint = (obj.type === 'waterer' && !obj.cluster_id) 
+    ? `<div class="panel-section">
+         <div style="background: rgba(220, 220, 170, 0.1); border: 1px solid var(--amber); border-radius: 6px; padding: 12px; font-size: 12px; line-height: 1.5;">
+           💡 <strong>Tip:</strong> Use the Connect Objects tool (🔗) to connect 1-3 plants to this waterer to form a cluster.
+         </div>
+       </div>`
+    : '';
+  
   content.innerHTML = `
     <div class="panel-section">
       <div class="panel-section-title">Type</div>
@@ -647,6 +776,8 @@ function showObjectPanel(obj) {
       <div class="panel-section-title">Cluster Status</div>
       ${clusterInfo}
     </div>
+    
+    ${watererHint}
     
     <div class="panel-section">
       <div class="panel-section-title">Details</div>
@@ -677,6 +808,154 @@ function showObjectPanel(obj) {
     <div class="panel-section">
       <button class="btn btn-danger" onclick="deleteMapObjectFromPanel(${obj.id})">
         Delete ${obj.type === 'plant' ? 'Plant' : 'Waterer'}
+      </button>
+    </div>
+  `;
+  
+  panel.classList.remove('hidden');
+}
+
+// Show cluster configuration panel
+async function showClusterPanel(obj, cluster) {
+  const panel = document.getElementById('rightPanel');
+  const title = document.getElementById('panelTitle');
+  const content = document.getElementById('panelContent');
+  
+  title.textContent = cluster.name || 'Cluster';
+  
+  // Initialize draft if needed
+  if (!clusterDraft[cluster.public_id]) {
+    clusterDraft[cluster.public_id] = {
+      pot: cluster.pot_size || null,
+      plantIds: (cluster.catalog_plants || []).map(p => p.id)
+    };
+  }
+  
+  const draft = clusterDraft[cluster.public_id];
+  const isCalibrated = cluster.is_calibrated;
+  
+  // Pot size selection
+  const potGrid = POT_KEYS.map(pk => `
+    <div class="tool-item" data-pot-item data-pot-key="${escapeHtml(pk)}" 
+      onclick="clusterPickPot('${escapeHtml(cluster.public_id)}', '${escapeHtml(pk)}')"
+      style="padding: 12px 8px; ${(draft.pot === pk || (!draft.pot && cluster.pot_size === pk)) ? 'background: var(--accent); border-color: var(--accent); color: white;' : ''}">
+      <div style="font-size: 11px; font-weight: 600;">${escapeHtml(POT_SIZES[pk] || pk)}</div>
+    </div>
+  `).join('');
+  
+  // Plant chips
+  const locked = draft.plantIds.length
+    ? catalogPlants.find(x => x.id === draft.plantIds[0])?.watering_group
+    : null;
+  
+  const plantChips = catalogPlants.map(p => {
+    const selected = draft.plantIds.includes(p.id);
+    const disabled = Boolean(locked && p.watering_group !== locked && !selected);
+    return `
+      <div class="tool-item" data-plant-chip data-plant-id="${p.id}"
+        onclick="clusterTogglePlant('${escapeHtml(cluster.public_id)}', ${p.id})"
+        style="padding: 8px 12px; grid-column: span 2; ${selected ? 'background: var(--accent); border-color: var(--accent); color: white;' : ''} ${disabled ? 'opacity: 0.3; cursor: not-allowed;' : ''}">
+        <div style="font-size: 12px;">${escapeHtml(p.name)} <span style="font-size: 10px; opacity: 0.8;">(${escapeHtml(groupLabel(p.watering_group))})</span></div>
+      </div>
+    `;
+  }).join('');
+  
+  // Calibration section
+  const calibrationSection = !isCalibrated ? `
+    <div class="panel-section" style="background: rgba(220, 220, 170, 0.1); border: 1px solid var(--amber);">
+      <div class="panel-section-title" style="color: var(--amber);">⚙️ Calibration Required</div>
+      <div style="font-size: 12px; margin-bottom: 12px; color: var(--text-dim);">Choose pot size and plants (1-3, same watering rhythm)</div>
+      
+      <div style="margin-bottom: 12px;">
+        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); margin-bottom: 8px;">Pot Size</div>
+        <div class="tool-grid">${potGrid}</div>
+      </div>
+      
+      <div style="margin-bottom: 12px;">
+        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); margin-bottom: 8px;">Plants in Cluster</div>
+        <div class="tool-grid">${plantChips}</div>
+      </div>
+      
+      <button class="btn" onclick="saveClusterCalibration('${escapeHtml(cluster.public_id)}')">
+        Save Calibration
+      </button>
+    </div>
+  ` : `
+    <div class="panel-section">
+      <div class="panel-section-title">Cluster Info</div>
+      <div class="property-row">
+        <span class="property-label">Pot Size</span>
+        <span class="property-value">${escapeHtml(POT_SIZES[cluster.pot_size] || cluster.pot_size || '—')}</span>
+      </div>
+      <div class="property-row">
+        <span class="property-label">Watering Rhythm</span>
+        <span class="property-value">${escapeHtml(groupLabel(cluster.watering_group))}</span>
+      </div>
+      <div class="property-row">
+        <span class="property-label">Plants</span>
+        <span class="property-value">${(cluster.catalog_plants || []).map(p => p.name).join(', ') || '—'}</span>
+      </div>
+    </div>
+    
+    <div class="panel-section">
+      <div class="panel-section-title">Device Pairing</div>
+      ${cluster.has_device 
+        ? `<div style="font-size: 13px; margin-bottom: 12px;"><span class="status-badge green"><span class="status-dot"></span>Device Connected</span></div>
+           <button class="btn btn-ghost" onclick="unpairCluster('${escapeHtml(cluster.public_id)}')">Unpair Device</button>`
+        : `<div style="font-size: 13px; margin-bottom: 12px;"><span class="status-badge gray"><span class="status-dot"></span>No Device</span></div>
+           <button class="btn" onclick="requestPairingCode('${escapeHtml(cluster.public_id)}')">Generate Pairing Code</button>
+           <div id="pairingBox" style="display: none; margin-top: 12px; padding: 12px; background: var(--bg-light); border: 1px solid var(--border); border-radius: 6px;"></div>`
+      }
+    </div>
+    
+    ${cluster.watering_armed ? `
+      <div class="panel-section">
+        <div class="panel-section-title">Watering Schedule</div>
+        <div style="font-size: 13px; margin-bottom: 12px;"><span class="status-badge green"><span class="status-dot"></span>Schedule Active</span></div>
+        <button class="btn btn-ghost" onclick="pauseClusterWatering('${escapeHtml(cluster.public_id)}')">Pause Schedule</button>
+      </div>
+    ` : `
+      <div class="panel-section">
+        <div class="panel-section-title">Watering Schedule</div>
+        <div style="font-size: 13px; margin-bottom: 12px;"><span class="status-badge amber"><span class="status-dot"></span>Schedule Paused</span></div>
+        <button class="btn" onclick="startClusterWatering('${escapeHtml(cluster.public_id)}')">Start Watering</button>
+      </div>
+    `}
+    
+    <div class="panel-section">
+      <div class="panel-section-title">Water Volume</div>
+      <div class="form-group">
+        <label class="form-label">Volume vs. Table: <span id="volumeValue">${cluster.ml_volume_pct || 100}%</span></label>
+        <input type="range" id="volumeSlider" class="form-input" min="50" max="150" step="1" value="${cluster.ml_volume_pct || 100}"
+          oninput="document.getElementById('volumeValue').textContent = this.value + '%'"
+          onchange="saveClusterVolume('${escapeHtml(cluster.public_id)}')">
+      </div>
+    </div>
+  `;
+  
+  content.innerHTML = `
+    <div class="panel-section">
+      <div class="panel-section-title">Cluster Name</div>
+      <div class="form-group">
+        <input type="text" class="form-input" id="clusterNameInput" value="${escapeHtml(cluster.name)}" 
+          onblur="saveClusterName('${escapeHtml(cluster.public_id)}')">
+      </div>
+    </div>
+    
+    ${calibrationSection}
+    
+    <div class="panel-section">
+      <div class="panel-section-title">Waterer Object</div>
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input type="text" class="form-input" id="objectName" value="${escapeHtml(obj.name)}" 
+          onblur="updateObjectName(${obj.id})">
+      </div>
+    </div>
+    
+    <div class="panel-section">
+      <button class="btn btn-danger" onclick="deleteMapObjectFromPanel(${obj.id})">
+        Delete Waterer
       </button>
     </div>
   `;

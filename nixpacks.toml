@@ -1,11 +1,5 @@
 [phases.setup]
-nixPkgs = ["nodejs-18_x", "python310"]
-
-[phases.build]
-cmds = [
-  "cd frontend && npm install && npm run build",
-  "pip install -r requirements.txt"
-]
+nixPkgs = ["python310"]
 
 [start]
 cmd = "gunicorn app:app"

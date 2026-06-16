@@ -251,7 +251,18 @@ function initCanvas() {
     closePanel();
   });
 
-  // Handle object movement
+  // Handle object movement - update snap points in real-time
+  canvas.on('object:moving', (e) => {
+    const obj = e.target;
+    if (obj && obj.objectId) {
+      // Update snap point positions during drag
+      updateSnapPointPositions(obj.objectId, obj.left, obj.top);
+      // Update connection positions during drag
+      updateConnectionPositionsWithSnaps(obj.objectId);
+    }
+  });
+
+  // Handle object movement - save final position
   canvas.on('object:modified', async (e) => {
     const obj = e.target;
     if (obj && obj.objectId) {
@@ -513,7 +524,8 @@ function createSnapPoints(objectId, x, y) {
       selectable: false,
       evented: true,
       opacity: 0.6,
-      hoverCursor: 'crosshair'
+      hoverCursor: 'crosshair',
+      perPixelTargetFind: true
     });
     
     snapPoint.objectId = objectId;
@@ -535,13 +547,14 @@ function createSnapPoints(objectId, x, y) {
     
     // Drag-to-connect functionality
     snapPoint.on('mousedown', function(e) {
-      if (selectedTool === 'connection' || !selectedTool) {
-        startDragConnection(objectId, dir, e);
-      }
+      e.e.stopPropagation();
+      e.e.preventDefault();
+      startDragConnection(objectId, dir, e);
     });
     
     points[dir] = snapPoint;
     canvas.add(snapPoint);
+    snapPoint.bringToFront(); // Ensure snap points are on top
   });
   
   snapPoints[objectId] = points;
@@ -640,10 +653,10 @@ function renderMapObject(obj) {
   const strokeColor = getObjectStrokeColor(obj);
   const icon = getObjectIcon(obj);
   
-  // Create circle
+  // Create circle at origin (0, 0) within group
   const circle = new fabric.Circle({
-    left: x,
-    top: y,
+    left: 0,
+    top: 0,
     radius: OBJECT_RADIUS,
     fill: fillColor,
     stroke: strokeColor,
@@ -651,7 +664,7 @@ function renderMapObject(obj) {
     originX: 'center',
     originY: 'center',
     hasControls: false,
-    hasBorders: true,
+    hasBorders: false,
     lockRotation: true,
     lockScalingX: true,
     lockScalingY: true,
@@ -663,10 +676,10 @@ function renderMapObject(obj) {
     })
   });
   
-  // Create icon (emoji)
+  // Create icon (emoji) relative to circle
   const iconText = new fabric.Text(icon, {
-    left: x,
-    top: y - 10,
+    left: 0,
+    top: -10,
     fontSize: 32,
     originX: 'center',
     originY: 'center',
@@ -674,10 +687,10 @@ function renderMapObject(obj) {
     evented: false
   });
   
-  // Create label
+  // Create label relative to circle
   const label = new fabric.Text(obj.name || 'Object', {
-    left: x,
-    top: y + 55,
+    left: 0,
+    top: 55,
     fontSize: 14,
     fill: '#cccccc',
     originX: 'center',
@@ -687,10 +700,12 @@ function renderMapObject(obj) {
     evented: false
   });
   
-  // Group circle, icon, and label
+  // Group circle, icon, and label with proper centering
   const group = new fabric.Group([circle, iconText, label], {
     left: x,
     top: y,
+    originX: 'center',
+    originY: 'center',
     hasControls: false,
     hasBorders: true,
     lockRotation: true,

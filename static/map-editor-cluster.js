@@ -1,21 +1,6 @@
 // Cluster management functions for map editor
 // Integrated cluster configuration in side panel
-
-const POT_SIZES = {
-  '5.5x4.5': '5.5" × 4.5"',
-  '8x7': '8" × 7"',
-  '9.5x8.5': '9.5" × 8.5"',
-  '12x11': '12" × 11"'
-};
-
-const POT_KEYS = Object.keys(POT_SIZES);
-
-function groupLabel(g) {
-  if (g === 'daily') return 'Daily';
-  if (g === 'twice_weekly') return '2× / week';
-  if (g === 'weekly') return 'Weekly';
-  return g || '—';
-}
+// NOTE: POT_SIZES, POT_KEYS, and groupLabel are defined in map-editor.js
 
 // Cluster calibration functions
 function clusterPickPot(publicId, potKey) {

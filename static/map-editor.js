@@ -592,6 +592,10 @@ function startDragConnection(objectId, snapDir, event) {
   
   canvas.add(tempLine);
   
+  // CRITICAL FIX: Disable canvas selection to prevent interference
+  canvas.selection = false;
+  canvas.discardActiveObject();
+  
   dragConnectionMode = {
     fromObjectId: objectId,
     fromSnapDir: snapDir,
@@ -601,6 +605,12 @@ function startDragConnection(objectId, snapDir, event) {
   
   // Highlight the starting snap point
   snapPoints[objectId][snapDir].set({ opacity: 1, radius: SNAP_POINT_RADIUS + 2 });
+  
+  // Bring all snap points to front for better hit detection
+  Object.values(snapPoints).forEach(pointSet => {
+    Object.values(pointSet).forEach(point => point.bringToFront());
+  });
+  
   canvas.renderAll();
   
   toast('Drag to a snap point on another object', false);
@@ -619,12 +629,29 @@ function handleDragConnectionMove(e) {
 function handleDragConnectionUp(e) {
   if (!dragConnectionMode) return;
   
-  const target = e.target;
+  // CRITICAL FIX: Re-enable canvas selection
+  canvas.selection = true;
   
-  // Check if we released on a snap point
-  if (target && target.isSnapPoint && target.objectId !== dragConnectionMode.fromObjectId) {
-    const toObjectId = target.objectId;
-    const toSnapDir = target.snapDirection;
+  // CRITICAL FIX: Use hit testing instead of relying on e.target
+  const pointer = canvas.getPointer(e.e);
+  const objects = canvas.getObjects();
+  
+  let targetSnapPoint = null;
+  
+  // Find snap point at pointer location
+  for (let obj of objects) {
+    if (obj.isSnapPoint && 
+        obj.objectId !== dragConnectionMode.fromObjectId &&
+        obj.containsPoint(pointer)) {
+      targetSnapPoint = obj;
+      break;
+    }
+  }
+  
+  // Check if we released on a valid snap point
+  if (targetSnapPoint) {
+    const toObjectId = targetSnapPoint.objectId;
+    const toSnapDir = targetSnapPoint.snapDirection;
     
     // Create connection
     createConnectionBetweenWithSnaps(
@@ -700,7 +727,8 @@ function renderMapObject(obj) {
     evented: false
   });
   
-  // Group circle, icon, and label with proper centering
+  // CRITICAL FIX: Group circle, icon, and label with perfect centering
+  // The label extends beyond the circle, causing group center offset
   const group = new fabric.Group([circle, iconText, label], {
     left: x,
     top: y,
@@ -713,6 +741,24 @@ function renderMapObject(obj) {
     lockScalingY: true
   });
   
+  // CRITICAL FIX: Adjust group position to center the circle (not the group bounds) at x,y
+  // The label offset causes the group center to be below the circle center
+  // Calculate the offset between group center and circle center
+  const groupBounds = group.getBoundingRect(false, true);
+  const circleActualY = y; // We want the circle at this Y
+  const groupCenterY = group.top; // Current group center Y
+  
+  // The circle is at the group's local origin, but label shifts group bounds down
+  // Adjust by moving the group up by the offset amount
+  const labelHeight = label.height || 0;
+  const labelTop = 55; // Label's top position relative to circle
+  const offset = (labelTop + labelHeight / 2) / 2; // Approximate offset caused by label
+  
+  group.set({
+    top: y - offset
+  });
+  
+  group.setCoords();
   group.objectId = obj.id;
   
   // Store reference
@@ -1484,8 +1530,158 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+// Drag-from-toolbar functionality
+let toolbarDragMode = null; // { type: 'plant' or 'waterer', ghostObject: fabricObject }
+
+function initToolbarDrag() {
+  // Make tool items draggable
+  document.querySelectorAll('.tool-item[data-type="plant"], .tool-item[data-type="waterer"]').forEach(item => {
+    const type = item.dataset.type;
+    
+    item.setAttribute('draggable', 'true');
+    
+    item.addEventListener('dragstart', (e) => {
+      e.dataTransfer.effectAllowed = 'copy';
+      e.dataTransfer.setData('text/plain', type);
+      
+      // Visual feedback
+      item.style.opacity = '0.5';
+      
+      toast(`Drag ${type} onto canvas to place`, false);
+    });
+    
+    item.addEventListener('dragend', (e) => {
+      item.style.opacity = '1';
+      
+      // Clean up ghost object if it exists
+      if (toolbarDragMode && toolbarDragMode.ghostObject) {
+        canvas.remove(toolbarDragMode.ghostObject);
+        toolbarDragMode = null;
+        canvas.renderAll();
+      }
+    });
+  });
+}
+
+function handleCanvasDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+  
+  // Get pointer position
+  const rect = canvas.lowerCanvasEl.getBoundingRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const pointer = canvas.restorePointerVpt({ x, y });
+  
+  // Create or update ghost object
+  const type = e.dataTransfer.types.includes('text/plain') ? e.dataTransfer.getData('text/plain') : null;
+  
+  if (type && (type === 'plant' || type === 'waterer')) {
+    if (!toolbarDragMode || toolbarDragMode.type !== type) {
+      // Remove old ghost if type changed
+      if (toolbarDragMode && toolbarDragMode.ghostObject) {
+        canvas.remove(toolbarDragMode.ghostObject);
+      }
+      
+      // Create ghost circle
+      const icon = type === 'plant' ? '🌱' : '💧';
+      const fillColor = type === 'plant' ? 'rgba(86, 156, 214, 0.3)' : 'rgba(220, 220, 170, 0.3)';
+      
+      const ghostCircle = new fabric.Circle({
+        radius: OBJECT_RADIUS,
+        fill: fillColor,
+        stroke: '#569cd6',
+        strokeWidth: 2,
+        strokeDashArray: [5, 5],
+        originX: 'center',
+        originY: 'center',
+        selectable: false,
+        evented: false,
+        opacity: 0.6
+      });
+      
+      const ghostIcon = new fabric.Text(icon, {
+        fontSize: 32,
+        originX: 'center',
+        originY: 'center',
+        selectable: false,
+        evented: false,
+        opacity: 0.6
+      });
+      
+      const ghostGroup = new fabric.Group([ghostCircle, ghostIcon], {
+        left: pointer.x,
+        top: pointer.y,
+        originX: 'center',
+        originY: 'center',
+        selectable: false,
+        evented: false
+      });
+      
+      canvas.add(ghostGroup);
+      ghostGroup.bringToFront();
+      
+      toolbarDragMode = {
+        type: type,
+        ghostObject: ghostGroup
+      };
+    } else if (toolbarDragMode && toolbarDragMode.ghostObject) {
+      // Update ghost position
+      toolbarDragMode.ghostObject.set({
+        left: pointer.x,
+        top: pointer.y
+      });
+      toolbarDragMode.ghostObject.setCoords();
+    }
+    
+    canvas.renderAll();
+  }
+}
+
+function handleCanvasDrop(e) {
+  e.preventDefault();
+  
+  const type = e.dataTransfer.getData('text/plain');
+  
+  if (type && (type === 'plant' || type === 'waterer')) {
+    // Get drop position
+    const rect = canvas.lowerCanvasEl.getBoundingRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const pointer = canvas.restorePointerVpt({ x, y });
+    
+    // Remove ghost object
+    if (toolbarDragMode && toolbarDragMode.ghostObject) {
+      canvas.remove(toolbarDragMode.ghostObject);
+      toolbarDragMode = null;
+      canvas.renderAll();
+    }
+    
+    // Create actual object
+    createObject(type, pointer.x, pointer.y);
+  }
+}
+
 // Initialize on load
 document.addEventListener('DOMContentLoaded', async () => {
   initCanvas();
   await loadAllData();
+  
+  // Initialize drag-from-toolbar
+  initToolbarDrag();
+  
+  // Add canvas drag and drop handlers
+  const canvasContainer = document.querySelector('.canvas-container');
+  if (canvasContainer) {
+    canvasContainer.addEventListener('dragover', handleCanvasDragOver);
+    canvasContainer.addEventListener('drop', handleCanvasDrop);
+    canvasContainer.addEventListener('dragleave', (e) => {
+      // Clean up ghost when leaving canvas
+      if (toolbarDragMode && toolbarDragMode.ghostObject) {
+        canvas.remove(toolbarDragMode.ghostObject);
+        toolbarDragMode = null;
+        canvas.renderAll();
+      }
+    });
+  }
 });

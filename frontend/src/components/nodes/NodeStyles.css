@@ -99,76 +99,150 @@
   background: white;
   border: 3px solid #000;
   border-radius: 0;
-  cursor: move;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-start;
-  padding: 8px;
+  cursor: default;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  transition: border-color 0.2s ease;
+  position: relative;
+  z-index: -1;
 }
 
 .room-node:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  /* Minimal hover effect */
 }
 
 .room-node.selected {
-  border-width: 4px;
-  box-shadow: 0 0 0 3px rgba(78, 201, 176, 0.3), 0 2px 8px rgba(0, 0, 0, 0.15);
+  border-color: #4ec9b0;
+  box-shadow: 0 0 0 1px rgba(78, 201, 176, 0.2);
 }
 
-.room-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: #333;
-  background: rgba(255, 255, 255, 0.9);
-  padding: 2px 6px;
-  border-radius: 2px;
+/* Wall click areas for door/window placement */
+.wall-click-area {
+  position: absolute;
+  background: transparent;
+  cursor: crosshair;
+  z-index: 1;
 }
 
-/* Door Node Styles */
-.door-node {
+.wall-click-area.top {
+  top: -5px;
+  left: 0;
+  right: 0;
+  height: 10px;
+}
+
+.wall-click-area.bottom {
+  bottom: -5px;
+  left: 0;
+  right: 0;
+  height: 10px;
+}
+
+.wall-click-area.left {
+  left: -5px;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+}
+
+.wall-click-area.right {
+  right: -5px;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+}
+
+/* Door openings */
+.door-opening {
+  position: absolute;
   width: 40px;
-  height: 2px;
-  cursor: move;
-  position: relative;
-}
-
-.door-line {
-  width: 100%;
-  height: 100%;
+  height: 3px;
   background: #8B4513;
-  box-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  z-index: 2;
+  transition: background 0.2s ease;
 }
 
-.door-node.selected .door-line {
-  background: var(--accent);
-  box-shadow: 0 0 4px var(--accent);
+.door-opening:hover {
+  background: #A0522D;
 }
 
-/* Window Node Styles */
-.window-node {
+.door-opening.top {
+  top: -3px;
+}
+
+.door-opening.bottom {
+  bottom: -3px;
+}
+
+.door-opening.left {
+  left: -3px;
+  width: 3px;
+  height: 40px;
+}
+
+.door-opening.right {
+  right: -3px;
+  width: 3px;
+  height: 40px;
+}
+
+/* Window openings */
+.window-opening {
+  position: absolute;
   width: 40px;
-  height: 2px;
-  cursor: move;
-  position: relative;
-}
-
-.window-line {
-  width: 100%;
-  height: 100%;
+  height: 3px;
   background: #4A90E2;
-  box-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  z-index: 2;
+  transition: background 0.2s ease;
   display: flex;
-  gap: 1px;
+  align-items: center;
+  justify-content: center;
 }
 
-.window-pane {
-  flex: 1;
-  background: rgba(255, 255, 255, 0.5);
+.window-opening:hover {
+  background: #5BA3F5;
 }
 
-.window-node.selected .window-line {
-  background: var(--accent);
-  box-shadow: 0 0 4px var(--accent);
+.window-opening.top {
+  top: -3px;
+}
+
+.window-opening.bottom {
+  bottom: -3px;
+}
+
+.window-opening.left {
+  left: -3px;
+  width: 3px;
+  height: 40px;
+  flex-direction: column;
+}
+
+.window-opening.right {
+  right: -3px;
+  width: 3px;
+  height: 40px;
+  flex-direction: column;
+}
+
+.window-pane-divider {
+  background: rgba(255, 255, 255, 0.6);
+  position: absolute;
+}
+
+.window-opening.top .window-pane-divider,
+.window-opening.bottom .window-pane-divider {
+  width: 1px;
+  height: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.window-opening.left .window-pane-divider,
+.window-opening.right .window-pane-divider {
+  height: 1px;
+  width: 3px;
+  top: 50%;
+  transform: translateY(-50%);
 }

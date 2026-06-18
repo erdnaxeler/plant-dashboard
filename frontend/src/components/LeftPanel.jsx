@@ -1,7 +1,7 @@
 import React from 'react';
 import './LeftPanel.css';
 
-export default function LeftPanel({ onAddNode }) {
+export default function LeftPanel({ onAddNode, cursorMode, onCursorModeToggle }) {
   const onDragStart = (event, nodeType) => {
     event.dataTransfer.setData('application/reactflow', nodeType);
     event.dataTransfer.effectAllowed = 'move';
@@ -10,7 +10,7 @@ export default function LeftPanel({ onAddNode }) {
   return (
     <div className="left-panel">
       <div className="panel-section">
-        <h3 className="panel-title">Tools</h3>
+        <h3 className="panel-title">Objects</h3>
         <div className="tools-grid">
           <div
             className="tool-item plant-tool"
@@ -47,12 +47,18 @@ export default function LeftPanel({ onAddNode }) {
             </svg>
             <span>Room</span>
           </div>
-          
+        </div>
+        <div className="panel-hint">
+          Drag onto canvas or click to add
+        </div>
+      </div>
+
+      <div className="panel-section">
+        <h3 className="panel-title">Wall Tools</h3>
+        <div className="tools-grid">
           <div
-            className="tool-item door-tool"
-            draggable
-            onDragStart={(e) => onDragStart(e, 'door')}
-            onClick={() => onAddNode('door')}
+            className={`tool-item cursor-tool door-tool ${cursorMode === 'door' ? 'active' : ''}`}
+            onClick={() => onCursorModeToggle('door')}
           >
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <rect x="6" y="4" width="12" height="16" rx="1" />
@@ -62,10 +68,8 @@ export default function LeftPanel({ onAddNode }) {
           </div>
           
           <div
-            className="tool-item window-tool"
-            draggable
-            onDragStart={(e) => onDragStart(e, 'window')}
-            onClick={() => onAddNode('window')}
+            className={`tool-item cursor-tool window-tool ${cursorMode === 'window' ? 'active' : ''}`}
+            onClick={() => onCursorModeToggle('window')}
           >
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <rect x="5" y="7" width="14" height="10" rx="1" />
@@ -76,7 +80,7 @@ export default function LeftPanel({ onAddNode }) {
           </div>
         </div>
         <div className="panel-hint">
-          Drag onto canvas or click to add
+          {cursorMode ? `Click on room walls to place ${cursorMode}s` : 'Click to activate cursor mode'}
         </div>
       </div>
     </div>

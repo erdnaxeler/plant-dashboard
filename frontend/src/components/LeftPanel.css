@@ -86,3 +86,22 @@
   text-align: center;
   font-style: italic;
 }
+
+/* Cursor mode tools (not draggable) */
+.cursor-tool {
+  cursor: pointer;
+}
+
+.cursor-tool:active {
+  cursor: pointer;
+}
+
+.cursor-tool.active {
+  border-color: var(--accent);
+  background: rgba(78, 201, 176, 0.1);
+  box-shadow: 0 0 0 2px rgba(78, 201, 176, 0.2);
+}
+
+.cursor-tool.active:hover {
+  transform: translateY(0);
+}

@@ -13,8 +13,6 @@ import 'reactflow/dist/style.css';
 import PlantNode from './nodes/PlantNode';
 import WatererNode from './nodes/WatererNode';
 import RoomNode from './nodes/RoomNode';
-import DoorNode from './nodes/DoorNode';
-import WindowNode from './nodes/WindowNode';
 import Toolbar from './Toolbar';
 import LeftPanel from './LeftPanel';
 import PropertiesPanel from './PropertiesPanel';
@@ -25,8 +23,6 @@ const nodeTypes = {
   plant: PlantNode,
   waterer: WatererNode,
   room: RoomNode,
-  door: DoorNode,
-  window: WindowNode,
 };
 
 let nodeIdCounter = 1;
@@ -39,6 +35,8 @@ export default function MapEditor() {
   const [selectedNode, setSelectedNode] = useState(null);
   const [clusters, setClusters] = useState([]);
   const [toasts, setToasts] = useState([]);
+  const [cursorMode, setCursorMode] = useState(null); // null, 'door', or 'window'
+  const [selectedOpening, setSelectedOpening] = useState(null); // {nodeId, type, id}
 
   useEffect(() => {
     loadMapData();
@@ -53,16 +51,32 @@ export default function MapEditor() {
       ]);
 
       // Convert MapObjects to React Flow nodes
-      const flowNodes = mapObjects.map(obj => ({
-        id: `node-${obj.id}`,
-        type: obj.type,
-        position: { x: obj.map_x || 0, y: obj.map_y || 0 },
-        data: { 
-          label: obj.name,
-          objectId: obj.id,
-          clusterId: obj.cluster_id,
-        },
-      }));
+      const flowNodes = mapObjects.map(obj => {
+        const nodeData = {
+          id: `node-${obj.id}`,
+          type: obj.type,
+          position: { x: obj.map_x || 0, y: obj.map_y || 0 },
+          data: { 
+            label: obj.name,
+            objectId: obj.id,
+            clusterId: obj.cluster_id,
+          },
+        };
+        
+        // Add door/window data for room nodes
+        if (obj.type === 'room' && obj.metadata) {
+          try {
+            const metadata = typeof obj.metadata === 'string' ? JSON.parse(obj.metadata) : obj.metadata;
+            nodeData.data.doors = metadata.doors || [];
+            nodeData.data.windows = metadata.windows || [];
+          } catch (e) {
+            nodeData.data.doors = [];
+            nodeData.data.windows = [];
+          }
+        }
+        
+        return nodeData;
+      });
 
       // Convert Connections to React Flow edges
       const flowEdges = connections.map(conn => ({
@@ -375,6 +389,118 @@ export default function MapEditor() {
     }
   };
 
+  // Handle cursor mode toggle
+  const handleCursorModeToggle = useCallback((mode) => {
+    setCursorMode(prevMode => prevMode === mode ? null : mode);
+  }, []);
+
+  // Handle wall click to add door/window
+  const handleWallClick = useCallback((nodeId, wall, offset) => {
+    if (!cursorMode) return;
+    
+    setNodes((nds) => nds.map((node) => {
+      if (node.id === nodeId && node.type === 'room') {
+        const openings = node.data[cursorMode === 'door' ? 'doors' : 'windows'] || [];
+        const newOpening = {
+          id: `${cursorMode}-${Date.now()}`,
+          wall,
+          offset: Math.max(0, offset - 20), // Center the 40px opening
+        };
+        
+        const updatedNode = {
+          ...node,
+          data: {
+            ...node.data,
+            [cursorMode === 'door' ? 'doors' : 'windows']: [...openings, newOpening],
+          },
+        };
+        
+        // Save to backend
+        saveRoomMetadata(node.data.objectId, updatedNode.data);
+        
+        return updatedNode;
+      }
+      return node;
+    }));
+    
+    showToast(`${cursorMode === 'door' ? 'Door' : 'Window'} added`);
+  }, [cursorMode, setNodes]);
+
+  // Handle opening click for selection/deletion
+  const handleOpeningClick = useCallback((nodeId, type, openingId) => {
+    setSelectedOpening({ nodeId, type, id: openingId });
+  }, []);
+
+  // Delete selected opening
+  const handleDeleteOpening = useCallback(() => {
+    if (!selectedOpening) return;
+    
+    setNodes((nds) => nds.map((node) => {
+      if (node.id === selectedOpening.nodeId && node.type === 'room') {
+        const openingKey = selectedOpening.type === 'door' ? 'doors' : 'windows';
+        const openings = node.data[openingKey] || [];
+        const updatedOpenings = openings.filter(o => o.id !== selectedOpening.id);
+        
+        const updatedNode = {
+          ...node,
+          data: {
+            ...node.data,
+            [openingKey]: updatedOpenings,
+          },
+        };
+        
+        // Save to backend
+        saveRoomMetadata(node.data.objectId, updatedNode.data);
+        
+        return updatedNode;
+      }
+      return node;
+    }));
+    
+    setSelectedOpening(null);
+    showToast(`${selectedOpening.type === 'door' ? 'Door' : 'Window'} removed`);
+  }, [selectedOpening, setNodes]);
+
+  // Save room metadata to backend
+  const saveRoomMetadata = async (objectId, data) => {
+    try {
+      const metadata = {
+        doors: data.doors || [],
+        windows: data.windows || [],
+      };
+      await MapObjectsAPI.update(objectId, { metadata: JSON.stringify(metadata) });
+    } catch (error) {
+      console.error('Failed to save room metadata:', error);
+      showToast('Failed to save changes', true);
+    }
+  };
+
+  // Listen for delete key to remove selected opening
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Delete' && selectedOpening) {
+        handleDeleteOpening();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedOpening, handleDeleteOpening]);
+
+  // Update nodes to include callbacks
+  const nodesWithCallbacks = nodes.map(node => {
+    if (node.type === 'room') {
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          onWallClick: (wall, offset) => handleWallClick(node.id, wall, offset),
+          onOpeningClick: (type, id) => handleOpeningClick(node.id, type, id),
+        },
+      };
+    }
+    return node;
+  });
+
   return (
     <div className="map-editor">
       <Toolbar 
@@ -382,7 +508,11 @@ export default function MapEditor() {
         onZoomOut={handleZoomOut}
         onFitView={handleFitView}
       />
-      <LeftPanel onAddNode={handleAddNode} />
+      <LeftPanel 
+        onAddNode={handleAddNode}
+        cursorMode={cursorMode}
+        onCursorModeToggle={handleCursorModeToggle}
+      />
       <PropertiesPanel 
         selectedNode={selectedNode}
         connectedPlants={getConnectedPlants()}
@@ -393,7 +523,7 @@ export default function MapEditor() {
       
       <div className="canvas-container" ref={reactFlowWrapper}>
         <ReactFlow
-          nodes={nodes}
+          nodes={nodesWithCallbacks}
           edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}

@@ -195,9 +195,9 @@ export default function WatererPanel({
                 flex: 1, 
                 fontSize: '16px', 
                 fontWeight: '600',
-                border: '1px solid #4a5568',
-                background: '#2d3748',
-                color: '#fff',
+                border: '1px solid var(--border)',
+                background: 'var(--bg-light)',
+                color: 'var(--text)',
                 padding: '4px 8px',
                 borderRadius: '4px'
               }}
@@ -226,7 +226,8 @@ export default function WatererPanel({
                 {connectedPlants.map(plant => (
                   <div key={plant.id} style={{ 
                     padding: '4px 8px', 
-                    background: '#2d3748', 
+                    background: 'var(--bg-light)',
+                    border: '1px solid var(--border)',
                     borderRadius: '4px',
                     fontSize: '14px'
                   }}>

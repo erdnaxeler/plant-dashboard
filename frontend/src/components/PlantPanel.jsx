@@ -108,9 +108,9 @@ export default function PlantPanel({
                 flex: 1, 
                 fontSize: '16px', 
                 fontWeight: '600',
-                border: '1px solid #4a5568',
-                background: '#2d3748',
-                color: '#fff',
+                border: '1px solid var(--border)',
+                background: 'var(--bg-light)',
+                color: 'var(--text)',
                 padding: '4px 8px',
                 borderRadius: '4px'
               }}
@@ -220,7 +220,8 @@ export default function PlantPanel({
                           justifyContent: 'space-between',
                           alignItems: 'center',
                           padding: '8px',
-                          background: '#2d3748',
+                          background: 'var(--bg-light)',
+                          border: '1px solid var(--border)',
                           borderRadius: '4px',
                           fontSize: '13px'
                         }}
@@ -298,13 +299,14 @@ export default function PlantPanel({
           <div style={{ 
             marginTop: '16px',
             padding: '12px',
-            background: '#2d3748',
+            background: 'var(--bg-light)',
+            border: '1px solid var(--border)',
             borderRadius: '6px',
             fontSize: '14px',
-            color: '#a0aec0',
+            color: 'var(--text-dim)',
             lineHeight: '1.5'
           }}>
-            <strong style={{ color: '#fff' }}>To add this plant to a cluster:</strong>
+            <strong style={{ color: 'var(--text)' }}>To add this plant to a cluster:</strong>
             <ol style={{ margin: '8px 0 0 0', paddingLeft: '20px' }}>
               <li>Connect this plant to a waterer</li>
               <li>The waterer will create a cluster</li>

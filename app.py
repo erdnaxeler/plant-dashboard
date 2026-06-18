@@ -1672,6 +1672,47 @@ def api_connections_create():
     if not from_obj or not to_obj:
         return jsonify({"error": "one or both objects not found"}), 404
     
+    # Validation: A plant cannot connect to multiple waterers
+    plant_obj = None
+    waterer_obj = None
+    
+    if from_obj.type == "plant" and to_obj.type == "waterer":
+        plant_obj = from_obj
+        waterer_obj = to_obj
+    elif from_obj.type == "waterer" and to_obj.type == "plant":
+        plant_obj = to_obj
+        waterer_obj = from_obj
+    
+    if plant_obj:
+        # Check if this plant is already connected to a waterer
+        existing_connections = Connection.query.filter(
+            (Connection.from_object_id == plant_obj.id) | 
+            (Connection.to_object_id == plant_obj.id)
+        ).all()
+        
+        for conn in existing_connections:
+            other_id = conn.to_object_id if conn.from_object_id == plant_obj.id else conn.from_object_id
+            other_obj = MapObject.query.get(other_id)
+            if other_obj and other_obj.type == "waterer":
+                return jsonify({"error": "This plant is already connected to a waterer. Disconnect it first."}), 400
+    
+    # Validation: A waterer cannot connect to more than 3 plants
+    if waterer_obj:
+        existing_connections = Connection.query.filter(
+            (Connection.from_object_id == waterer_obj.id) | 
+            (Connection.to_object_id == waterer_obj.id)
+        ).all()
+        
+        plant_count = 0
+        for conn in existing_connections:
+            other_id = conn.to_object_id if conn.from_object_id == waterer_obj.id else conn.from_object_id
+            other_obj = MapObject.query.get(other_id)
+            if other_obj and other_obj.type == "plant":
+                plant_count += 1
+        
+        if plant_count >= 3:
+            return jsonify({"error": "A waterer can only connect to a maximum of 3 plants"}), 400
+    
     # Check if connection already exists (in either direction)
     existing = Connection.query.filter(
         ((Connection.from_object_id == from_id) & (Connection.to_object_id == to_id)) |

@@ -187,6 +187,18 @@ class MapObject(db.Model):
     map_x = db.Column(db.Float, nullable=False, default=0.0)
     map_y = db.Column(db.Float, nullable=False, default=0.0)
     cluster_id = db.Column(db.Integer, db.ForeignKey("cluster.id"), nullable=True, index=True)
+    
+    # Plant-specific properties (independent of cluster)
+    plant_type_id = db.Column(db.Integer, db.ForeignKey("catalog_plant.id"), nullable=True)  # Reference to CatalogPlant
+    plant_nickname = db.Column(db.String(128), nullable=True)  # Optional custom nickname
+    plant_pot_size = db.Column(db.String(32), nullable=True)  # Actual pot size of this plant
+    plant_watering_schedule = db.Column(db.String(32), nullable=True)  # Preferred schedule (daily/twice_weekly/weekly)
+    plant_watering_amount = db.Column(db.Float, nullable=True)  # Preferred ml per watering
+    
+    # Waterer-specific properties (independent of cluster)
+    waterer_optimized_pot_size = db.Column(db.String(32), nullable=True)  # What pot size this waterer is optimized for
+    waterer_schedule = db.Column(db.String(32), nullable=True)  # Watering schedule this waterer provides
+    
     created_at = db.Column(
         db.DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -224,6 +236,48 @@ def _migrate_cluster_columns():
     """Add columns to existing Railway/Postgres DBs (create_all does not alter tables)."""
     try:
         insp = inspect(db.engine)
+        
+        # Migrate MapObject columns
+        if "map_object" in insp.get_table_names():
+            map_obj_cols = {c["name"] for c in insp.get_columns("map_object")}
+            dialect = db.engine.dialect.name
+            
+            if "plant_pot_size" not in map_obj_cols:
+                if dialect == "postgresql":
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN IF NOT EXISTS plant_pot_size VARCHAR(32)"))
+                else:
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN plant_pot_size VARCHAR(32)"))
+                db.session.commit()
+            
+            if "plant_watering_schedule" not in map_obj_cols:
+                if dialect == "postgresql":
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN IF NOT EXISTS plant_watering_schedule VARCHAR(32)"))
+                else:
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN plant_watering_schedule VARCHAR(32)"))
+                db.session.commit()
+            
+            if "plant_watering_amount" not in map_obj_cols:
+                if dialect == "postgresql":
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN IF NOT EXISTS plant_watering_amount FLOAT"))
+                else:
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN plant_watering_amount FLOAT"))
+                db.session.commit()
+            
+            if "waterer_optimized_pot_size" not in map_obj_cols:
+                if dialect == "postgresql":
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN IF NOT EXISTS waterer_optimized_pot_size VARCHAR(32)"))
+                else:
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN waterer_optimized_pot_size VARCHAR(32)"))
+                db.session.commit()
+            
+            if "waterer_schedule" not in map_obj_cols:
+                if dialect == "postgresql":
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN IF NOT EXISTS waterer_schedule VARCHAR(32)"))
+                else:
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN waterer_schedule VARCHAR(32)"))
+                db.session.commit()
+        
+        # Migrate Cluster columns
         if "cluster" not in insp.get_table_names():
             return
         col_names = {c["name"] for c in insp.get_columns("cluster")}
@@ -1422,7 +1476,7 @@ def update_settings():
 
 def _serialize_map_object(obj: MapObject) -> dict[str, Any]:
     """Serialize a MapObject for API responses."""
-    return {
+    result = {
         "id": obj.id,
         "type": obj.type,
         "name": obj.name,
@@ -1432,6 +1486,21 @@ def _serialize_map_object(obj: MapObject) -> dict[str, Any]:
         "created_at": obj.created_at.isoformat() if obj.created_at else None,
         "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
     }
+    
+    # Include plant-specific properties
+    if obj.type == "plant":
+        result["plant_type_id"] = obj.plant_type_id
+        result["plant_nickname"] = obj.plant_nickname
+        result["plant_pot_size"] = obj.plant_pot_size
+        result["plant_watering_schedule"] = obj.plant_watering_schedule
+        result["plant_watering_amount"] = obj.plant_watering_amount
+    
+    # Include waterer-specific properties
+    if obj.type == "waterer":
+        result["waterer_optimized_pot_size"] = obj.waterer_optimized_pot_size
+        result["waterer_schedule"] = obj.waterer_schedule
+    
+    return result
 
 
 def _serialize_connection(conn: Connection) -> dict[str, Any]:
@@ -1538,6 +1607,19 @@ def api_map_objects_list():
     return jsonify([_serialize_map_object(obj) for obj in objects])
 
 
+@app.route("/api/app/map-objects/<int:object_id>", methods=["GET"])
+def api_map_objects_get(object_id):
+    """Get a single map object by ID."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    obj = MapObject.query.get(object_id)
+    if not obj:
+        return jsonify({"error": "not found"}), 404
+    
+    return jsonify(_serialize_map_object(obj))
+
+
 @app.route("/api/app/map-objects", methods=["POST"])
 def api_map_objects_create():
     """Create a new map object (plant or waterer)."""
@@ -1572,7 +1654,7 @@ def api_map_objects_create():
 
 @app.route("/api/app/map-objects/<int:object_id>", methods=["PUT"])
 def api_map_objects_update(object_id):
-    """Update a map object's position and/or name."""
+    """Update a map object's position, name, and type-specific properties."""
     if not _require_dashboard_auth():
         return jsonify({"error": "Unauthorized"}), 401
     
@@ -1595,6 +1677,53 @@ def api_map_objects_update(object_id):
             obj.map_y = float(payload["y"])
     except (TypeError, ValueError):
         return jsonify({"error": "invalid x or y coordinates"}), 400
+    
+    # Update plant-specific properties
+    if obj.type == "plant":
+        if "plant_type_id" in payload:
+            type_id = payload.get("plant_type_id")
+            if type_id is not None:
+                # Validate that the catalog plant exists
+                catalog_plant = CatalogPlant.query.get(type_id)
+                if not catalog_plant:
+                    return jsonify({"error": "invalid plant_type_id"}), 400
+            obj.plant_type_id = type_id
+        
+        if "plant_nickname" in payload:
+            obj.plant_nickname = payload.get("plant_nickname")
+        
+        if "plant_pot_size" in payload:
+            pot_size = payload.get("plant_pot_size")
+            if pot_size and pot_size not in POT_SIZES:
+                return jsonify({"error": "invalid pot_size", "allowed": list(POT_SIZES)}), 400
+            obj.plant_pot_size = pot_size
+        
+        if "plant_watering_schedule" in payload:
+            schedule = payload.get("plant_watering_schedule")
+            if schedule and schedule not in WATERING_GROUP_EVENTS_PER_WEEK:
+                return jsonify({"error": "invalid watering_schedule", "allowed": list(WATERING_GROUP_EVENTS_PER_WEEK.keys())}), 400
+            obj.plant_watering_schedule = schedule
+        
+        if "plant_watering_amount" in payload:
+            try:
+                amount = payload.get("plant_watering_amount")
+                obj.plant_watering_amount = float(amount) if amount is not None else None
+            except (TypeError, ValueError):
+                return jsonify({"error": "invalid watering_amount"}), 400
+    
+    # Update waterer-specific properties
+    if obj.type == "waterer":
+        if "waterer_optimized_pot_size" in payload:
+            pot_size = payload.get("waterer_optimized_pot_size")
+            if pot_size and pot_size not in POT_SIZES:
+                return jsonify({"error": "invalid pot_size", "allowed": list(POT_SIZES)}), 400
+            obj.waterer_optimized_pot_size = pot_size
+        
+        if "waterer_schedule" in payload:
+            schedule = payload.get("waterer_schedule")
+            if schedule and schedule not in WATERING_GROUP_EVENTS_PER_WEEK:
+                return jsonify({"error": "invalid schedule", "allowed": list(WATERING_GROUP_EVENTS_PER_WEEK.keys())}), 400
+            obj.waterer_schedule = schedule
     
     db.session.commit()
     return jsonify(_serialize_map_object(obj))

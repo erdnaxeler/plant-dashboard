@@ -25,6 +25,9 @@ export default function WatererPanel({
   const [volumePct, setVolumePct] = useState(100);
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState('');
+  const [optimizedPotSize, setOptimizedPotSize] = useState('');
+  const [watererSchedule, setWatererSchedule] = useState('');
+  const [connectedPlantsData, setConnectedPlantsData] = useState([]);
 
   useEffect(() => {
     loadCatalogPlants();
@@ -42,8 +45,15 @@ export default function WatererPanel({
   useEffect(() => {
     if (watererNode) {
       setEditedName(watererNode.data.label);
+      loadWatererData();
     }
   }, [watererNode]);
+
+  useEffect(() => {
+    if (connectedPlants.length > 0) {
+      loadConnectedPlantsData();
+    }
+  }, [connectedPlants]);
 
   const loadCatalogPlants = async () => {
     try {
@@ -51,6 +61,29 @@ export default function WatererPanel({
       setCatalogPlants(plants);
     } catch (error) {
       console.error('Failed to load catalog plants:', error);
+    }
+  };
+
+  const loadWatererData = async () => {
+    if (!watererNode) return;
+    
+    try {
+      const watererData = await MapObjectsAPI.get(watererNode.data.objectId);
+      setOptimizedPotSize(watererData.waterer_optimized_pot_size || '');
+      setWatererSchedule(watererData.waterer_schedule || '');
+    } catch (error) {
+      console.error('Failed to load waterer data:', error);
+    }
+  };
+
+  const loadConnectedPlantsData = async () => {
+    try {
+      const plantsData = await Promise.all(
+        connectedPlants.map(plant => MapObjectsAPI.get(plant.id))
+      );
+      setConnectedPlantsData(plantsData);
+    } catch (error) {
+      console.error('Failed to load connected plants data:', error);
     }
   };
 
@@ -172,6 +205,38 @@ export default function WatererPanel({
     }
   };
 
+  const handleOptimizedPotSizeChange = async (newPotSize) => {
+    if (!watererNode) return;
+    
+    setOptimizedPotSize(newPotSize);
+    
+    try {
+      await MapObjectsAPI.update(watererNode.data.objectId, { 
+        waterer_optimized_pot_size: newPotSize || null 
+      });
+      onUpdate();
+    } catch (error) {
+      console.error('Failed to update optimized pot size:', error);
+      alert('Failed to update optimized pot size');
+    }
+  };
+
+  const handleWatererScheduleChange = async (newSchedule) => {
+    if (!watererNode) return;
+    
+    setWatererSchedule(newSchedule);
+    
+    try {
+      await MapObjectsAPI.update(watererNode.data.objectId, { 
+        waterer_schedule: newSchedule || null 
+      });
+      onUpdate();
+    } catch (error) {
+      console.error('Failed to update waterer schedule:', error);
+      alert('Failed to update waterer schedule');
+    }
+  };
+
   if (!watererNode) {
     return null;
   }
@@ -216,24 +281,64 @@ export default function WatererPanel({
       </div>
 
       <div className="panel-content">
+        {/* Waterer Properties Section (only when not in cluster) */}
+        {!cluster && (
+          <>
+            <div className="property-group">
+              <label>Optimized Pot Size</label>
+              <select value={optimizedPotSize || ''} onChange={(e) => handleOptimizedPotSizeChange(e.target.value)}>
+                <option value="">Select pot size...</option>
+                <option value="5.5x4.5">5.5" × 4.5"</option>
+                <option value="8x7">8" × 7"</option>
+                <option value="9.5x8.5">9.5" × 8.5"</option>
+                <option value="12x11">12" × 11"</option>
+              </select>
+            </div>
+
+            <div className="property-group">
+              <label>Watering Schedule</label>
+              <select value={watererSchedule || ''} onChange={(e) => handleWatererScheduleChange(e.target.value)}>
+                <option value="">Select schedule...</option>
+                <option value="daily">Daily (7x/week)</option>
+                <option value="twice_weekly">Twice Weekly (2x/week)</option>
+                <option value="weekly">Weekly (1x/week)</option>
+              </select>
+            </div>
+          </>
+        )}
+
         {/* Connected Plants Info */}
         <div className="property-group">
-          <label>Connected Plants</label>
+          <label>Connected Plants ({connectedPlants.length}/3)</label>
           <div className="property-value">
             {connectedPlants.length === 0 && 'None'}
             {connectedPlants.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                {connectedPlants.map(plant => (
-                  <div key={plant.id} style={{ 
-                    padding: '4px 8px', 
-                    background: 'var(--bg-light)',
-                    border: '1px solid var(--border)',
-                    borderRadius: '4px',
-                    fontSize: '14px'
-                  }}>
-                    {plant.name}
-                  </div>
-                ))}
+                {connectedPlantsData.map(plant => {
+                  const hasMismatch = optimizedPotSize && plant.plant_pot_size && 
+                                      optimizedPotSize !== plant.plant_pot_size;
+                  return (
+                    <div key={plant.id} style={{ 
+                      padding: '6px 8px', 
+                      background: 'var(--bg-light)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '4px',
+                      fontSize: '13px'
+                    }}>
+                      <div>{plant.name}</div>
+                      {plant.plant_pot_size && (
+                        <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '2px' }}>
+                          Pot: {plant.plant_pot_size}
+                          {hasMismatch && (
+                            <span style={{ color: '#fc8181', marginLeft: '6px', fontWeight: '600' }}>
+                              ⚠ Mismatch!
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

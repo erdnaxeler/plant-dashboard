@@ -18,6 +18,7 @@ api.interceptors.request.use(config => {
 
 export const MapObjectsAPI = {
   getAll: () => api.get('/map-objects').then(res => res.data),
+  get: (id) => api.get(`/map-objects/${id}`).then(res => res.data),
   create: (type, name, x, y) => api.post('/map-objects', { type, name, x, y }).then(res => res.data),
   update: (id, data) => api.put(`/map-objects/${id}`, data).then(res => res.data),
   delete: (id) => api.delete(`/map-objects/${id}`).then(res => res.data),

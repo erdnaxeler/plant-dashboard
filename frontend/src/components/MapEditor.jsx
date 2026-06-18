@@ -15,7 +15,7 @@ import WatererNode from './nodes/WatererNode';
 import Toolbar from './Toolbar';
 import LeftPanel from './LeftPanel';
 import PropertiesPanel from './PropertiesPanel';
-import { MapObjectsAPI, ConnectionsAPI, ClustersAPI } from '../hooks/useApi';
+import { MapObjectsAPI, ConnectionsAPI, ClustersAPI, CatalogPlantsAPI } from '../hooks/useApi';
 import './MapEditor.css';
 
 const nodeTypes = {

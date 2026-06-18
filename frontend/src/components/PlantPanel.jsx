@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MapObjectsAPI, ClustersAPI } from '../hooks/useApi';
+import { MapObjectsAPI, ClustersAPI, CatalogPlantsAPI } from '../hooks/useApi';
 import './PropertiesPanel.css';
 
 const WATERING_GROUPS = {
@@ -14,17 +14,20 @@ export default function PlantPanel({
   onUpdate,
   onDelete 
 }) {
-  const [isEditingName, setIsEditingName] = useState(false);
-  const [editedName, setEditedName] = useState('');
-  const [preferredGroup, setPreferredGroup] = useState('daily');
+  const [catalogPlants, setCatalogPlants] = useState([]);
+  const [plantTypeId, setPlantTypeId] = useState(null);
+  const [nickname, setNickname] = useState('');
+  const [potSize, setPotSize] = useState('');
+  const [schedule, setSchedule] = useState('');
   const [wateringHistory, setWateringHistory] = useState([]);
 
   useEffect(() => {
+    loadCatalogPlants();
+  }, []);
+
+  useEffect(() => {
     if (plantNode) {
-      setEditedName(plantNode.data.label);
-      // Load plant-specific preferences when available
-      // For now, we'll use placeholder data
-      setPreferredGroup(plantNode.data.preferredWateringGroup || 'daily');
+      loadPlantData();
     }
   }, [plantNode]);
 
@@ -33,6 +36,29 @@ export default function PlantPanel({
       loadWateringHistory();
     }
   }, [cluster]);
+
+  const loadCatalogPlants = async () => {
+    try {
+      const plants = await CatalogPlantsAPI.getAll();
+      setCatalogPlants(plants);
+    } catch (error) {
+      console.error('Failed to load catalog plants:', error);
+    }
+  };
+
+  const loadPlantData = async () => {
+    if (!plantNode) return;
+    
+    try {
+      const plantData = await MapObjectsAPI.get(plantNode.data.objectId);
+      setPlantTypeId(plantData.plant_type_id || null);
+      setNickname(plantData.plant_nickname || '');
+      setPotSize(plantData.plant_pot_size || '');
+      setSchedule(plantData.plant_watering_schedule || '');
+    } catch (error) {
+      console.error('Failed to load plant data:', error);
+    }
+  };
 
   const loadWateringHistory = async () => {
     if (!cluster) return;
@@ -50,35 +76,67 @@ export default function PlantPanel({
     }
   };
 
-  const handleSaveName = async () => {
-    if (!plantNode || !editedName.trim()) {
-      setIsEditingName(false);
-      return;
-    }
-
+  const handlePlantTypeChange = async (newPlantTypeId) => {
+    if (!plantNode) return;
+    
+    setPlantTypeId(newPlantTypeId ? parseInt(newPlantTypeId) : null);
+    
     try {
-      await MapObjectsAPI.update(plantNode.data.objectId, { name: editedName.trim() });
-      setIsEditingName(false);
+      await MapObjectsAPI.update(plantNode.data.objectId, { 
+        plant_type_id: newPlantTypeId ? parseInt(newPlantTypeId) : null 
+      });
       onUpdate();
     } catch (error) {
-      console.error('Failed to update name:', error);
-      alert('Failed to update name');
+      console.error('Failed to update plant type:', error);
+      alert('Failed to update plant type');
     }
   };
 
-  const handlePreferredGroupChange = async (newGroup) => {
+  const handleNicknameChange = async (newNickname) => {
     if (!plantNode) return;
     
-    setPreferredGroup(newGroup);
+    setNickname(newNickname);
     
-    // TODO: Save to backend when MapObject model is extended with preferred_watering_group
-    // For now, just update local state
     try {
-      // await MapObjectsAPI.update(plantNode.data.objectId, { preferred_watering_group: newGroup });
-      // onUpdate();
-      console.log('Preferred watering group would be saved:', newGroup);
+      await MapObjectsAPI.update(plantNode.data.objectId, { 
+        plant_nickname: newNickname || null 
+      });
+      onUpdate();
     } catch (error) {
-      console.error('Failed to update preferred watering group:', error);
+      console.error('Failed to update nickname:', error);
+      alert('Failed to update nickname');
+    }
+  };
+
+  const handlePotSizeChange = async (newPotSize) => {
+    if (!plantNode) return;
+    
+    setPotSize(newPotSize);
+    
+    try {
+      await MapObjectsAPI.update(plantNode.data.objectId, { 
+        plant_pot_size: newPotSize || null 
+      });
+      onUpdate();
+    } catch (error) {
+      console.error('Failed to update pot size:', error);
+      alert('Failed to update pot size');
+    }
+  };
+
+  const handleScheduleChange = async (newSchedule) => {
+    if (!plantNode) return;
+    
+    setSchedule(newSchedule);
+    
+    try {
+      await MapObjectsAPI.update(plantNode.data.objectId, { 
+        plant_watering_schedule: newSchedule || null 
+      });
+      onUpdate();
+    } catch (error) {
+      console.error('Failed to update schedule:', error);
+      alert('Failed to update schedule');
     }
   };
 
@@ -86,8 +144,11 @@ export default function PlantPanel({
     return null;
   }
 
-  const hasScheduleConflict = cluster && cluster.watering_group && 
-                               cluster.watering_group !== preferredGroup;
+  const hasScheduleConflict = cluster && cluster.watering_group && schedule &&
+                               cluster.watering_group !== schedule;
+  
+  const hasPotSizeMismatch = cluster && cluster.pot_size && potSize &&
+                              cluster.pot_size !== potSize;
 
   return (
     <div className="properties-panel">
@@ -96,30 +157,9 @@ export default function PlantPanel({
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
             <path d="M3,13A9,9 0 0,0 12,22C12.5,22 12.97,21.96 13.42,21.88C13.15,21.32 13,20.68 13,20A7,7 0 0,1 20,13C20.68,13 21.32,13.15 21.88,13.42C21.96,12.97 22,12.5 22,12A9,9 0 0,0 13,3V12L7.5,6.5C5.08,8.14 3.43,10.89 3,14H3M23,20C23,22.21 21.21,24 19,24C18.23,24 17.5,23.77 16.89,23.36L13,21.07L16.89,18.78C17.5,18.37 18.23,18.14 19,18.14C21.21,18.14 23,19.93 23,22.14" />
           </svg>
-          {isEditingName ? (
-            <input
-              type="text"
-              value={editedName}
-              onChange={(e) => setEditedName(e.target.value)}
-              onBlur={handleSaveName}
-              onKeyDown={(e) => e.key === 'Enter' && handleSaveName()}
-              autoFocus
-              style={{ 
-                flex: 1, 
-                fontSize: '16px', 
-                fontWeight: '600',
-                border: '1px solid var(--border)',
-                background: 'var(--bg-light)',
-                color: 'var(--text)',
-                padding: '4px 8px',
-                borderRadius: '4px'
-              }}
-            />
-          ) : (
-            <h3 onClick={() => setIsEditingName(true)} style={{ cursor: 'pointer', margin: 0 }}>
-              {plantNode.data.label}
-            </h3>
-          )}
+          <h3 style={{ margin: 0 }}>
+            {plantNode.data.label}
+          </h3>
         </div>
         <button className="btn-icon" onClick={onDelete} title="Delete">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -129,20 +169,52 @@ export default function PlantPanel({
       </div>
 
       <div className="panel-content">
-        {/* Preferred Watering Schedule */}
+        {/* Plant Type Dropdown */}
         <div className="property-group">
-          <label>Preferred Watering Schedule</label>
+          <label>Plant Type</label>
           <select 
-            value={preferredGroup} 
-            onChange={(e) => handlePreferredGroupChange(e.target.value)}
+            value={plantTypeId || ''} 
+            onChange={(e) => handlePlantTypeChange(e.target.value)}
           >
-            {Object.entries(WATERING_GROUPS).map(([key, label]) => (
-              <option key={key} value={key}>{label}</option>
+            <option value="">Select plant type...</option>
+            {catalogPlants.map(plant => (
+              <option key={plant.id} value={plant.id}>{plant.name}</option>
             ))}
           </select>
-          <small style={{ marginTop: '4px', display: 'block', color: '#a0aec0' }}>
-            This is the plant's ideal watering frequency
-          </small>
+        </div>
+
+        {/* Optional Nickname */}
+        <div className="property-group">
+          <label>Nickname (Optional)</label>
+          <input
+            type="text"
+            value={nickname || ''}
+            onChange={(e) => handleNicknameChange(e.target.value)}
+            placeholder="e.g., Kitchen Basil"
+          />
+        </div>
+
+        {/* Pot Size */}
+        <div className="property-group">
+          <label>Pot Size</label>
+          <select value={potSize || ''} onChange={(e) => handlePotSizeChange(e.target.value)}>
+            <option value="">Select pot size...</option>
+            <option value="5.5x4.5">5.5" × 4.5"</option>
+            <option value="8x7">8" × 7"</option>
+            <option value="9.5x8.5">9.5" × 8.5"</option>
+            <option value="12x11">12" × 11"</option>
+          </select>
+        </div>
+
+        {/* Preferred Schedule */}
+        <div className="property-group">
+          <label>Preferred Watering Schedule</label>
+          <select value={schedule || ''} onChange={(e) => handleScheduleChange(e.target.value)}>
+            <option value="">Select schedule...</option>
+            <option value="daily">Daily (7x/week)</option>
+            <option value="twice_weekly">Twice Weekly (2x/week)</option>
+            <option value="weekly">Weekly (1x/week)</option>
+          </select>
         </div>
 
         {/* Current Cluster Assignment */}
@@ -167,6 +239,29 @@ export default function PlantPanel({
           </div>
         </div>
 
+        {/* Pot Size Mismatch Warning */}
+        {hasPotSizeMismatch && (
+          <div className="property-group">
+            <div style={{ 
+              padding: '12px', 
+              background: '#fc8181', 
+              color: '#1a202c',
+              borderRadius: '6px',
+              fontSize: '14px',
+              marginTop: '8px'
+            }}>
+              <strong>⚠️ Pot Size Mismatch</strong>
+              <div style={{ marginTop: '4px' }}>
+                This plant has a <strong>{potSize}</strong> pot but the 
+                cluster is optimized for <strong>{cluster.pot_size}</strong>.
+              </div>
+              <div style={{ marginTop: '6px', fontSize: '13px', opacity: 0.9 }}>
+                Consider moving this plant to a cluster with matching pot size.
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Schedule Conflict Warning */}
         {hasScheduleConflict && (
           <div className="property-group">
@@ -180,7 +275,7 @@ export default function PlantPanel({
             }}>
               <strong>⚠️ Schedule Conflict</strong>
               <div style={{ marginTop: '4px' }}>
-                This plant prefers <strong>{WATERING_GROUPS[preferredGroup]}</strong> but the 
+                This plant prefers <strong>{WATERING_GROUPS[schedule]}</strong> but the 
                 cluster is set to <strong>{WATERING_GROUPS[cluster.watering_group]}</strong>.
               </div>
               <div style={{ marginTop: '6px', fontSize: '13px', opacity: 0.9 }}>

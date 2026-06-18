@@ -81,11 +81,28 @@ export default function PlantPanel({
     
     setPlantTypeId(newPlantTypeId ? parseInt(newPlantTypeId) : null);
     
+    // Task #1: Auto-select ideal watering cycle
+    if (newPlantTypeId) {
+      const selectedPlant = catalogPlants.find(p => p.id === parseInt(newPlantTypeId));
+      if (selectedPlant && selectedPlant.watering_group) {
+        setSchedule(selectedPlant.watering_group);
+      }
+    }
+    
     try {
-      await MapObjectsAPI.update(plantNode.data.objectId, { 
+      const updates = { 
         plant_type_id: newPlantTypeId ? parseInt(newPlantTypeId) : null 
-      });
-      onUpdate();
+      };
+      
+      // Also update schedule if plant type was selected
+      if (newPlantTypeId) {
+        const selectedPlant = catalogPlants.find(p => p.id === parseInt(newPlantTypeId));
+        if (selectedPlant && selectedPlant.watering_group) {
+          updates.plant_watering_schedule = selectedPlant.watering_group;
+        }
+      }
+      
+      await MapObjectsAPI.update(plantNode.data.objectId, updates);
     } catch (error) {
       console.error('Failed to update plant type:', error);
       alert('Failed to update plant type');
@@ -101,7 +118,7 @@ export default function PlantPanel({
       await MapObjectsAPI.update(plantNode.data.objectId, { 
         plant_nickname: newNickname || null 
       });
-      onUpdate();
+      // Task #2: Don't call onUpdate() to prevent panel from closing
     } catch (error) {
       console.error('Failed to update nickname:', error);
       alert('Failed to update nickname');
@@ -117,7 +134,7 @@ export default function PlantPanel({
       await MapObjectsAPI.update(plantNode.data.objectId, { 
         plant_pot_size: newPotSize || null 
       });
-      onUpdate();
+      // Task #2: Don't call onUpdate() to prevent panel from closing
     } catch (error) {
       console.error('Failed to update pot size:', error);
       alert('Failed to update pot size');
@@ -133,7 +150,7 @@ export default function PlantPanel({
       await MapObjectsAPI.update(plantNode.data.objectId, { 
         plant_watering_schedule: newSchedule || null 
       });
-      onUpdate();
+      // Task #2: Don't call onUpdate() to prevent panel from closing
     } catch (error) {
       console.error('Failed to update schedule:', error);
       alert('Failed to update schedule');
@@ -244,7 +261,7 @@ export default function PlantPanel({
           <div className="property-group">
             <div style={{ 
               padding: '12px', 
-              background: '#fc8181', 
+              background: '#f6e05e', 
               color: '#1a202c',
               borderRadius: '6px',
               fontSize: '14px',
@@ -267,7 +284,7 @@ export default function PlantPanel({
           <div className="property-group">
             <div style={{ 
               padding: '12px', 
-              background: '#fc8181', 
+              background: '#f6e05e', 
               color: '#1a202c',
               borderRadius: '6px',
               fontSize: '14px',

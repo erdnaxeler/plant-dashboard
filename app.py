@@ -1494,6 +1494,14 @@ def _serialize_map_object(obj: MapObject) -> dict[str, Any]:
         result["plant_pot_size"] = obj.plant_pot_size
         result["plant_watering_schedule"] = obj.plant_watering_schedule
         result["plant_watering_amount"] = obj.plant_watering_amount
+        
+        # Task #3: Compute display name as nickname || plant_type_name
+        if obj.plant_nickname:
+            result["name"] = obj.plant_nickname
+        elif obj.plant_type_id:
+            catalog_plant = db.session.query(CatalogPlant).filter_by(id=obj.plant_type_id).first()
+            if catalog_plant:
+                result["name"] = catalog_plant.name
     
     # Include waterer-specific properties
     if obj.type == "waterer":
@@ -1571,9 +1579,16 @@ def _update_cluster_from_connections(waterer_id: int) -> Optional[str]:
         return None
     
     # Valid configuration: 1 waterer + 1-3 plants
-    # Validate all plants have the same watering_group
-    # For now, we'll use a placeholder approach since plants don't yet have catalog_plant references
-    # This will be extended when the frontend allows assigning catalog plants to map objects
+    
+    # Task #5: Implement inheritance - when 1 plant connected, waterer inherits its properties
+    if len(plants) == 1:
+        plant = plants[0]
+        # Inherit pot size and plant type from the single connected plant
+        if plant.plant_pot_size:
+            waterer.waterer_optimized_pot_size = plant.plant_pot_size
+        if plant.plant_watering_schedule:
+            waterer.waterer_schedule = plant.plant_watering_schedule
+    # When 2+ plants: waterer keeps its existing settings (no inheritance)
     
     # Create or update cluster
     cluster = None

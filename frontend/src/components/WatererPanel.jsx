@@ -330,7 +330,7 @@ export default function WatererPanel({
                         <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '2px' }}>
                           Pot: {plant.plant_pot_size}
                           {hasMismatch && (
-                            <span style={{ color: '#fc8181', marginLeft: '6px', fontWeight: '600' }}>
+                            <span style={{ color: '#f6e05e', marginLeft: '6px', fontWeight: '600' }}>
                               ⚠ Mismatch!
                             </span>
                           )}
@@ -357,148 +357,94 @@ export default function WatererPanel({
             <div className="cluster-section">
               <h4>Cluster Configuration</h4>
 
-              {/* Cluster Name */}
-              <div className="property-group">
-                <label>Cluster Name</label>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <input
-                    type="text"
-                    value={clusterName}
-                    onChange={(e) => setClusterName(e.target.value)}
-                    onBlur={handleRenameCluster}
-                    onKeyDown={(e) => e.key === 'Enter' && handleRenameCluster()}
-                    style={{ flex: 1 }}
-                  />
-                </div>
-              </div>
+              {/* Task #6 & #7: Removed cluster name, status, and calibration UI */}
               
               <div className="property-group">
-                <label>Status</label>
-                <div className="status-badge">{cluster.status_message}</div>
+                <label>Pot Size</label>
+                <div className="property-value">{POT_SIZES[cluster.pot_size] || 'Not set'}</div>
               </div>
 
-              {!cluster.is_calibrated && (
-                <>
-                  <div className="property-group">
-                    <label>Pot Size</label>
-                    <select value={potSize} onChange={(e) => setPotSize(e.target.value)}>
-                      <option value="">Select pot size</option>
-                      {Object.entries(POT_SIZES).map(([key, label]) => (
-                        <option key={key} value={key}>{label}</option>
-                      ))}
-                    </select>
-                  </div>
+              <div className="property-group">
+                <label>Plant Types</label>
+                <div className="property-value">
+                  {cluster.catalog_plants?.map(p => p.name).join(', ') || 'None'}
+                </div>
+              </div>
 
-                  <div className="property-group">
-                    <label>Plant Types (1-3)</label>
-                    <div className="plant-list">
-                      {catalogPlants.map(plant => (
-                        <div
-                          key={plant.id}
-                          className={`plant-item ${selectedPlantIds.includes(plant.id) ? 'selected' : ''}`}
-                          onClick={() => togglePlantSelection(plant.id)}
-                        >
-                          <span>{plant.name}</span>
-                          <span className="plant-group">{plant.watering_group}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+              <div className="property-group">
+                <label>Watering Group</label>
+                <div className="property-value">{cluster.watering_group || 'Not set'}</div>
+              </div>
 
-                  <button className="btn-primary" onClick={handleCalibrate}>
-                    Calibrate Cluster
-                  </button>
-                </>
+              {cluster.ml_per_event && (
+                <div className="property-group">
+                  <label>Base Amount</label>
+                  <div className="property-value">
+                    {cluster.ml_per_event} ml per event
+                  </div>
+                </div>
               )}
 
-              {cluster.is_calibrated && (
+              <div className="property-group">
+                <label>Volume Adjustment</label>
+                <input
+                  type="range"
+                  min="50"
+                  max="150"
+                  value={volumePct}
+                  onChange={(e) => handleVolumeChange(Number(e.target.value))}
+                  style={{ width: '100%' }}
+                />
+                <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '14px' }}>
+                  {volumePct}% {cluster.ml_per_event ? `(${Math.round(cluster.ml_per_event * volumePct / 100)} ml)` : ''}
+                </div>
+              </div>
+
+              {cluster.next_watering_at && (
+                <div className="property-group">
+                  <label>Next Watering</label>
+                  <div className="property-value">
+                    {new Date(cluster.next_watering_at).toLocaleString()}
+                  </div>
+                </div>
+              )}
+
+              <div className="divider"></div>
+
+              {!cluster.has_device && (
+                <button className="btn-primary" onClick={handleGetPairingCode}>
+                  Get Pairing Code
+                </button>
+              )}
+
+              {showPairingCode && (
+                <div className="pairing-code">
+                  <div className="code-display">{pairingCode}</div>
+                  <small>Code expires in 5 minutes</small>
+                </div>
+              )}
+
+              {cluster.has_device && (
                 <>
                   <div className="property-group">
-                    <label>Pot Size</label>
-                    <div className="property-value">{POT_SIZES[cluster.pot_size]}</div>
-                  </div>
-
-                  <div className="property-group">
-                    <label>Plant Types</label>
+                    <label>Device Status</label>
                     <div className="property-value">
-                      {cluster.catalog_plants?.map(p => p.name).join(', ')}
+                      {cluster.device_status === 'ok' ? '✓ Connected' : cluster.device_status}
                     </div>
                   </div>
 
-                  <div className="property-group">
-                    <label>Watering Group</label>
-                    <div className="property-value">{cluster.watering_group}</div>
-                  </div>
-
-                  <div className="property-group">
-                    <label>Base Amount</label>
-                    <div className="property-value">
-                      {cluster.ml_per_event} ml per event
-                    </div>
-                  </div>
-
-                  <div className="property-group">
-                    <label>Volume Adjustment</label>
-                    <input
-                      type="range"
-                      min="50"
-                      max="150"
-                      value={volumePct}
-                      onChange={(e) => handleVolumeChange(Number(e.target.value))}
-                      style={{ width: '100%' }}
-                    />
-                    <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '14px' }}>
-                      {volumePct}% ({Math.round(cluster.ml_per_event * volumePct / 100)} ml)
-                    </div>
-                  </div>
-
-                  {cluster.next_watering_at && (
-                    <div className="property-group">
-                      <label>Next Watering</label>
-                      <div className="property-value">
-                        {new Date(cluster.next_watering_at).toLocaleString()}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="divider"></div>
-
-                  {!cluster.has_device && (
-                    <button className="btn-primary" onClick={handleGetPairingCode}>
-                      Get Pairing Code
+                  {cluster.watering_armed ? (
+                    <button className="btn-secondary" onClick={handlePauseWatering}>
+                      ⏸ Pause Watering
+                    </button>
+                  ) : (
+                    <button className="btn-primary" onClick={handleStartWatering}>
+                      ▶ Start Watering
                     </button>
                   )}
-
-                  {showPairingCode && (
-                    <div className="pairing-code">
-                      <div className="code-display">{pairingCode}</div>
-                      <small>Code expires in 5 minutes</small>
-                    </div>
-                  )}
-
-                  {cluster.has_device && (
-                    <>
-                      <div className="property-group">
-                        <label>Device Status</label>
-                        <div className="property-value">
-                          {cluster.device_status === 'ok' ? '✓ Connected' : cluster.device_status}
-                        </div>
-                      </div>
-
-                      {cluster.watering_armed ? (
-                        <button className="btn-secondary" onClick={handlePauseWatering}>
-                          ⏸ Pause Watering
-                        </button>
-                      ) : (
-                        <button className="btn-primary" onClick={handleStartWatering}>
-                          ▶ Start Watering
-                        </button>
-                      )}
-                      <button className="btn-secondary" onClick={handleUnpair} style={{ marginTop: '8px' }}>
-                        Unpair Device
-                      </button>
-                    </>
-                  )}
+                  <button className="btn-secondary" onClick={handleUnpair} style={{ marginTop: '8px' }}>
+                    Unpair Device
+                  </button>
                 </>
               )}
             </div>

@@ -297,7 +297,7 @@ export default function MapEditor() {
       const clustersData = await ClustersAPI.getAll();
       setClusters(clustersData);
       
-      // Reload map data to get updated cluster associations
+      // Reload map data to get updated cluster associations and node labels
       await loadMapData();
     } catch (error) {
       console.error('Failed to reload clusters:', error);

@@ -20,6 +20,7 @@ export default function PlantPanel({
   const [potSize, setPotSize] = useState('');
   const [schedule, setSchedule] = useState('');
   const [wateringHistory, setWateringHistory] = useState([]);
+  const [recommendedSchedule, setRecommendedSchedule] = useState(null);
 
   useEffect(() => {
     loadCatalogPlants();
@@ -81,12 +82,15 @@ export default function PlantPanel({
     
     setPlantTypeId(newPlantTypeId ? parseInt(newPlantTypeId) : null);
     
-    // Task #1: Auto-select ideal watering cycle
+    // Task #1: Auto-select ideal watering cycle and mark as recommended
     if (newPlantTypeId) {
       const selectedPlant = catalogPlants.find(p => p.id === parseInt(newPlantTypeId));
       if (selectedPlant && selectedPlant.watering_group) {
         setSchedule(selectedPlant.watering_group);
+        setRecommendedSchedule(selectedPlant.watering_group);
       }
+    } else {
+      setRecommendedSchedule(null);
     }
     
     try {
@@ -103,6 +107,11 @@ export default function PlantPanel({
       }
       
       await MapObjectsAPI.update(plantNode.data.objectId, updates);
+      
+      // Update the node label in the map
+      if (onUpdate) {
+        onUpdate();
+      }
     } catch (error) {
       console.error('Failed to update plant type:', error);
       alert('Failed to update plant type');
@@ -118,7 +127,10 @@ export default function PlantPanel({
       await MapObjectsAPI.update(plantNode.data.objectId, { 
         plant_nickname: newNickname || null 
       });
-      // Task #2: Don't call onUpdate() to prevent panel from closing
+      // Update the node label in the map
+      if (onUpdate) {
+        onUpdate();
+      }
     } catch (error) {
       console.error('Failed to update nickname:', error);
       alert('Failed to update nickname');
@@ -228,32 +240,16 @@ export default function PlantPanel({
           <label>Preferred Watering Schedule</label>
           <select value={schedule || ''} onChange={(e) => handleScheduleChange(e.target.value)}>
             <option value="">Select schedule...</option>
-            <option value="daily">Daily (7x/week)</option>
-            <option value="twice_weekly">Twice Weekly (2x/week)</option>
-            <option value="weekly">Weekly (1x/week)</option>
+            <option value="daily">
+              Daily (7x/week){recommendedSchedule === 'daily' ? ' (recommended)' : ''}
+            </option>
+            <option value="twice_weekly">
+              Twice Weekly (2x/week){recommendedSchedule === 'twice_weekly' ? ' (recommended)' : ''}
+            </option>
+            <option value="weekly">
+              Weekly (1x/week){recommendedSchedule === 'weekly' ? ' (recommended)' : ''}
+            </option>
           </select>
-        </div>
-
-        {/* Current Cluster Assignment */}
-        <div className="property-group">
-          <label>Current Cluster</label>
-          <div className="property-value">
-            {!cluster && (
-              <span style={{ color: '#a0aec0', fontSize: '14px' }}>
-                Not assigned to any cluster
-              </span>
-            )}
-            {cluster && (
-              <div>
-                <div style={{ fontWeight: '500' }}>{cluster.name}</div>
-                {cluster.is_calibrated && (
-                  <div style={{ fontSize: '14px', marginTop: '4px', color: '#a0aec0' }}>
-                    Current schedule: {WATERING_GROUPS[cluster.watering_group]}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
         </div>
 
         {/* Pot Size Mismatch Warning */}
@@ -388,44 +384,6 @@ export default function PlantPanel({
           </>
         )}
 
-        {/* Cluster Info */}
-        {cluster && cluster.is_calibrated && (
-          <>
-            <div className="divider"></div>
-            
-            <div className="property-group">
-              <label>Cluster Details</label>
-              <div style={{ fontSize: '14px', color: '#a0aec0', lineHeight: '1.6' }}>
-                <div>Pot size: {cluster.pot_size}</div>
-                <div>Volume: {cluster.ml_per_event} ml per event</div>
-                {cluster.next_watering_at && (
-                  <div>Next watering: {new Date(cluster.next_watering_at).toLocaleString()}</div>
-                )}
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Instructions */}
-        {!cluster && (
-          <div style={{ 
-            marginTop: '16px',
-            padding: '12px',
-            background: 'var(--bg-light)',
-            border: '1px solid var(--border)',
-            borderRadius: '6px',
-            fontSize: '14px',
-            color: 'var(--text-dim)',
-            lineHeight: '1.5'
-          }}>
-            <strong style={{ color: 'var(--text)' }}>To add this plant to a cluster:</strong>
-            <ol style={{ margin: '8px 0 0 0', paddingLeft: '20px' }}>
-              <li>Connect this plant to a waterer</li>
-              <li>The waterer will create a cluster</li>
-              <li>Configure the cluster in the waterer panel</li>
-            </ol>
-          </div>
-        )}
       </div>
     </div>
   );

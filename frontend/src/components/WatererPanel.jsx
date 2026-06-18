@@ -344,12 +344,6 @@ export default function WatererPanel({
           </div>
         </div>
 
-        {!cluster && connectedPlants.length > 0 && (
-          <div className="info-box">
-            <small>Connect 1-3 plants to create a cluster</small>
-          </div>
-        )}
-
         {cluster && (
           <>
             <div className="divider"></div>

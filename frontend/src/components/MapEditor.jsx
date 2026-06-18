@@ -12,7 +12,7 @@ import 'reactflow/dist/style.css';
 
 import PlantNode from './nodes/PlantNode';
 import WatererNode from './nodes/WatererNode';
-import RoomNode from './nodes/RoomNode';
+import RoomLayer from './RoomLayer';
 import Toolbar from './Toolbar';
 import LeftPanel from './LeftPanel';
 import PropertiesPanel from './PropertiesPanel';
@@ -22,7 +22,6 @@ import './MapEditor.css';
 const nodeTypes = {
   plant: PlantNode,
   waterer: WatererNode,
-  room: RoomNode,
 };
 
 let nodeIdCounter = 1;
@@ -37,6 +36,8 @@ export default function MapEditor() {
   const [toasts, setToasts] = useState([]);
   const [cursorMode, setCursorMode] = useState(null); // null, 'door', or 'window'
   const [selectedOpening, setSelectedOpening] = useState(null); // {nodeId, type, id}
+  const [rooms, setRooms] = useState([]); // Rooms as background layer
+  const [roomsLocked, setRoomsLocked] = useState(false); // Lock/unlock rooms
 
   useEffect(() => {
     loadMapData();
@@ -50,33 +51,60 @@ export default function MapEditor() {
         ClustersAPI.getAll(),
       ]);
 
-      // Convert MapObjects to React Flow nodes
-      const flowNodes = mapObjects.map(obj => {
-        const nodeData = {
-          id: `node-${obj.id}`,
-          type: obj.type,
-          position: { x: obj.map_x || 0, y: obj.map_y || 0 },
-          data: { 
-            label: obj.name,
-            objectId: obj.id,
-            clusterId: obj.cluster_id,
-          },
-        };
+      // Separate rooms and regular nodes
+      const roomObjects = [];
+      const nodeObjects = [];
+      
+      mapObjects.forEach(obj => {
+        if (obj.type === 'room') {
+          roomObjects.push(obj);
+        } else {
+          nodeObjects.push(obj);
+        }
+      });
+
+      // Convert room objects to room layer format
+      const roomsData = roomObjects.map(obj => {
+        let doors = [];
+        let windows = [];
+        let width = 400;
+        let height = 300;
         
-        // Add door/window data for room nodes
-        if (obj.type === 'room' && obj.metadata) {
+        if (obj.metadata) {
           try {
             const metadata = typeof obj.metadata === 'string' ? JSON.parse(obj.metadata) : obj.metadata;
-            nodeData.data.doors = metadata.doors || [];
-            nodeData.data.windows = metadata.windows || [];
+            doors = metadata.doors || [];
+            windows = metadata.windows || [];
+            width = metadata.width || 400;
+            height = metadata.height || 300;
           } catch (e) {
-            nodeData.data.doors = [];
-            nodeData.data.windows = [];
+            // Use defaults
           }
         }
         
-        return nodeData;
+        return {
+          id: obj.id,
+          name: obj.name,
+          x: obj.map_x || 0,
+          y: obj.map_y || 0,
+          width,
+          height,
+          doors,
+          windows,
+        };
       });
+
+      // Convert plant/waterer objects to React Flow nodes
+      const flowNodes = nodeObjects.map(obj => ({
+        id: `node-${obj.id}`,
+        type: obj.type,
+        position: { x: obj.map_x || 0, y: obj.map_y || 0 },
+        data: { 
+          label: obj.name,
+          objectId: obj.id,
+          clusterId: obj.cluster_id,
+        },
+      }));
 
       // Convert Connections to React Flow edges
       const flowEdges = connections.map(conn => ({
@@ -95,6 +123,7 @@ export default function MapEditor() {
 
       setNodes(flowNodes);
       setEdges(flowEdges);
+      setRooms(roomsData);
       setClusters(clustersData);
 
       // Update node ID counter
@@ -227,24 +256,38 @@ export default function MapEditor() {
         plant: 'Plant',
         waterer: 'Waterer',
         room: 'Room',
-        door: 'Door',
-        window: 'Window',
       };
       const name = `${typeNames[type] || 'Object'} ${nodeIdCounter}`;
       const mapObject = await MapObjectsAPI.create(type, name, position.x, position.y);
 
-      const newNode = {
-        id: `node-${mapObject.id}`,
-        type: type,
-        position: { x: mapObject.map_x, y: mapObject.map_y },
-        data: { 
-          label: mapObject.name,
-          objectId: mapObject.id,
-          clusterId: mapObject.cluster_id,
-        },
-      };
+      if (type === 'room') {
+        // Add to rooms layer
+        const newRoom = {
+          id: mapObject.id,
+          name: mapObject.name,
+          x: mapObject.map_x,
+          y: mapObject.map_y,
+          width: 400,
+          height: 300,
+          doors: [],
+          windows: [],
+        };
+        setRooms((prevRooms) => [...prevRooms, newRoom]);
+      } else {
+        // Add to ReactFlow nodes
+        const newNode = {
+          id: `node-${mapObject.id}`,
+          type: type,
+          position: { x: mapObject.map_x, y: mapObject.map_y },
+          data: { 
+            label: mapObject.name,
+            objectId: mapObject.id,
+            clusterId: mapObject.cluster_id,
+          },
+        };
+        setNodes((nds) => nds.concat(newNode));
+      }
 
-      setNodes((nds) => nds.concat(newNode));
       nodeIdCounter++;
       showToast(`${typeNames[type] || 'Object'} added`);
     } catch (error) {
@@ -486,20 +529,11 @@ export default function MapEditor() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedOpening, handleDeleteOpening]);
 
-  // Update nodes to include callbacks
-  const nodesWithCallbacks = nodes.map(node => {
-    if (node.type === 'room') {
-      return {
-        ...node,
-        data: {
-          ...node.data,
-          onWallClick: (wall, offset) => handleWallClick(node.id, wall, offset),
-          onOpeningClick: (type, id) => handleOpeningClick(node.id, type, id),
-        },
-      };
-    }
-    return node;
-  });
+  // Lock/unlock rooms toggle
+  const handleToggleRoomsLock = useCallback(() => {
+    setRoomsLocked(prev => !prev);
+    showToast(roomsLocked ? 'Rooms unlocked' : 'Rooms locked');
+  }, [roomsLocked]);
 
   return (
     <div className="map-editor">
@@ -507,6 +541,8 @@ export default function MapEditor() {
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
         onFitView={handleFitView}
+        roomsLocked={roomsLocked}
+        onToggleRoomsLock={handleToggleRoomsLock}
       />
       <LeftPanel 
         onAddNode={handleAddNode}
@@ -522,8 +558,9 @@ export default function MapEditor() {
       />
       
       <div className="canvas-container" ref={reactFlowWrapper}>
+        <RoomLayer rooms={rooms} isLocked={roomsLocked} />
         <ReactFlow
-          nodes={nodesWithCallbacks}
+          nodes={nodes}
           edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}

@@ -12,6 +12,9 @@ import 'reactflow/dist/style.css';
 
 import PlantNode from './nodes/PlantNode';
 import WatererNode from './nodes/WatererNode';
+import RoomNode from './nodes/RoomNode';
+import DoorNode from './nodes/DoorNode';
+import WindowNode from './nodes/WindowNode';
 import Toolbar from './Toolbar';
 import LeftPanel from './LeftPanel';
 import PropertiesPanel from './PropertiesPanel';
@@ -21,6 +24,9 @@ import './MapEditor.css';
 const nodeTypes = {
   plant: PlantNode,
   waterer: WatererNode,
+  room: RoomNode,
+  door: DoorNode,
+  window: WindowNode,
 };
 
 let nodeIdCounter = 1;
@@ -203,7 +209,14 @@ export default function MapEditor() {
     });
 
     try {
-      const name = type === 'plant' ? `Plant ${nodeIdCounter}` : `Waterer ${nodeIdCounter}`;
+      const typeNames = {
+        plant: 'Plant',
+        waterer: 'Waterer',
+        room: 'Room',
+        door: 'Door',
+        window: 'Window',
+      };
+      const name = `${typeNames[type] || 'Object'} ${nodeIdCounter}`;
       const mapObject = await MapObjectsAPI.create(type, name, position.x, position.y);
 
       const newNode = {
@@ -219,7 +232,7 @@ export default function MapEditor() {
 
       setNodes((nds) => nds.concat(newNode));
       nodeIdCounter++;
-      showToast(`${type === 'plant' ? 'Plant' : 'Waterer'} added`);
+      showToast(`${typeNames[type] || 'Object'} added`);
     } catch (error) {
       console.error('Failed to create object:', error);
       showToast('Failed to create object', true);
@@ -247,7 +260,14 @@ export default function MapEditor() {
       });
 
       try {
-        const name = type === 'plant' ? `Plant ${nodeIdCounter}` : `Waterer ${nodeIdCounter}`;
+        const typeNames = {
+          plant: 'Plant',
+          waterer: 'Waterer',
+          room: 'Room',
+          door: 'Door',
+          window: 'Window',
+        };
+        const name = `${typeNames[type] || 'Object'} ${nodeIdCounter}`;
         const mapObject = await MapObjectsAPI.create(type, name, position.x, position.y);
 
         const newNode = {
@@ -263,7 +283,7 @@ export default function MapEditor() {
 
         setNodes((nds) => nds.concat(newNode));
         nodeIdCounter++;
-        showToast(`${type === 'plant' ? 'Plant' : 'Waterer'} added`);
+        showToast(`${typeNames[type] || 'Object'} added`);
       } catch (error) {
         console.error('Failed to create object:', error);
         showToast('Failed to create object', true);

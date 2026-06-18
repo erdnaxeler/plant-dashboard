@@ -35,6 +35,45 @@ export default function LeftPanel({ onAddNode }) {
             </svg>
             <span>Waterer</span>
           </div>
+          
+          <div
+            className="tool-item room-tool"
+            draggable
+            onDragStart={(e) => onDragStart(e, 'room')}
+            onClick={() => onAddNode('room')}
+          >
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="4" y="4" width="16" height="16" rx="1" />
+            </svg>
+            <span>Room</span>
+          </div>
+          
+          <div
+            className="tool-item door-tool"
+            draggable
+            onDragStart={(e) => onDragStart(e, 'door')}
+            onClick={() => onAddNode('door')}
+          >
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="6" y="4" width="12" height="16" rx="1" />
+              <circle cx="15" cy="12" r="1" fill="currentColor" />
+            </svg>
+            <span>Door</span>
+          </div>
+          
+          <div
+            className="tool-item window-tool"
+            draggable
+            onDragStart={(e) => onDragStart(e, 'window')}
+            onClick={() => onAddNode('window')}
+          >
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="5" y="7" width="14" height="10" rx="1" />
+              <line x1="12" y1="7" x2="12" y2="17" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            <span>Window</span>
+          </div>
         </div>
         <div className="panel-hint">
           Drag onto canvas or click to add

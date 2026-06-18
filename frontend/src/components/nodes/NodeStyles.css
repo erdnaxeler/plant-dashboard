@@ -91,3 +91,84 @@
 .react-flow__handle-bottom { bottom: -7px; }
 .react-flow__handle-left { left: -7px; }
 .react-flow__handle-right { right: -7px; }
+
+/* Room Node Styles */
+.room-node {
+  min-width: 200px;
+  min-height: 150px;
+  background: white;
+  border: 3px solid #000;
+  border-radius: 0;
+  cursor: move;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 8px;
+}
+
+.room-node:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.room-node.selected {
+  border-width: 4px;
+  box-shadow: 0 0 0 3px rgba(78, 201, 176, 0.3), 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.room-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 2px 6px;
+  border-radius: 2px;
+}
+
+/* Door Node Styles */
+.door-node {
+  width: 40px;
+  height: 2px;
+  cursor: move;
+  position: relative;
+}
+
+.door-line {
+  width: 100%;
+  height: 100%;
+  background: #8B4513;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
+}
+
+.door-node.selected .door-line {
+  background: var(--accent);
+  box-shadow: 0 0 4px var(--accent);
+}
+
+/* Window Node Styles */
+.window-node {
+  width: 40px;
+  height: 2px;
+  cursor: move;
+  position: relative;
+}
+
+.window-line {
+  width: 100%;
+  height: 100%;
+  background: #4A90E2;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
+  display: flex;
+  gap: 1px;
+}
+
+.window-pane {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.window-node.selected .window-line {
+  background: var(--accent);
+  box-shadow: 0 0 4px var(--accent);
+}

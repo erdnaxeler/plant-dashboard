@@ -61,6 +61,18 @@
   color: var(--blue);
 }
 
+.room-tool svg {
+  color: #333;
+}
+
+.door-tool svg {
+  color: #8B4513;
+}
+
+.window-tool svg {
+  color: #4A90E2;
+}
+
 .tool-item span {
   font-size: 13px;
   font-weight: 500;

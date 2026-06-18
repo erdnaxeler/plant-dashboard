@@ -1637,15 +1637,15 @@ def api_map_objects_get(object_id):
 
 @app.route("/api/app/map-objects", methods=["POST"])
 def api_map_objects_create():
-    """Create a new map object (plant or waterer)."""
+    """Create a new map object (plant, waterer, room, door, or window)."""
     if not _require_dashboard_auth():
         return jsonify({"error": "Unauthorized"}), 401
     
     payload = request.get_json() or {}
     
     obj_type = payload.get("type", "").strip().lower()
-    if obj_type not in ["plant", "waterer"]:
-        return jsonify({"error": "type must be 'plant' or 'waterer'"}), 400
+    if obj_type not in ["plant", "waterer", "room", "door", "window"]:
+        return jsonify({"error": "type must be 'plant', 'waterer', 'room', 'door', or 'window'"}), 400
     
     name = (payload.get("name") or f"{obj_type.capitalize()}").strip()
     

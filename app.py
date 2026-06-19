@@ -449,33 +449,28 @@ def _run_segments_ms(ml_total: float, flow_ml_per_min: float) -> list[int]:
 def _calculate_next_watering_time(cluster: Cluster, from_time: datetime) -> datetime:
     """
     Calculate the next watering time from a given starting point.
-    This is used AFTER watering to set the next scheduled time.
+    If you watered TODAY, next watering is TOMORROW at minimum.
     """
     interval = _interval_for_group(cluster.watering_group)
     
-    # No preferred hour: simple interval
+    # No preferred hour: simple interval from last watering
     if cluster.preferred_watering_hour_utc is None:
         return from_time + interval
     
-    # With preferred hour: find next occurrence at that hour
+    # With preferred hour: find next occurrence at that hour AFTER full interval
     pref_hour = cluster.preferred_watering_hour_utc
-    min_interval = interval * 0.5  # Safety: at least 50% of interval
-    earliest_allowed = from_time + min_interval
     
-    # Start at earliest_allowed date with preferred hour
+    # Start searching from FULL interval forward (not 50%)
+    earliest_allowed = from_time + interval
+    
+    # Find next occurrence of preferred hour
     candidate = earliest_allowed.replace(hour=pref_hour, minute=0, second=0, microsecond=0)
     
-    # If that's before earliest_allowed, try next day
-    if candidate < earliest_allowed:
+    # If that time already passed today, use tomorrow
+    if candidate <= from_time:
         candidate += timedelta(days=1)
     
-    # Keep advancing by days until we find valid time
-    for _ in range(14):
-        if candidate >= earliest_allowed:
-            return candidate
-        candidate += timedelta(days=1)
-    
-    return earliest_allowed
+    return candidate
 
 
 def _is_watering_time_now(cluster: Cluster, now: datetime) -> bool:

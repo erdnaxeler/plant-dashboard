@@ -1269,6 +1269,29 @@ def api_cluster_rename(public_id):
     return jsonify(_serialize_cluster(c))
 
 
+@app.route("/api/app/clusters/<public_id>/initialize-schedule", methods=["POST"])
+def api_cluster_initialize_schedule(public_id):
+    """Calculate and set next_watering_at based on last_watering_at."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    c = Cluster.query.filter_by(public_id=public_id).first()
+    if not c:
+        return jsonify({"error": "not found"}), 404
+    if not c.is_calibrated:
+        return jsonify({"error": "cluster not calibrated"}), 400
+
+    # Calculate next_watering_at from last_watering_at or now
+    base_time = c.last_watering_at if c.last_watering_at else _utc_now()
+    c.next_watering_at = _calculate_next_watering_time(c, base_time)
+    db.session.commit()
+    
+    return jsonify({
+        "ok": True,
+        "next_watering_at": c.next_watering_at.isoformat(),
+        "calculated_from": "last_watering_at" if c.last_watering_at else "now"
+    })
+
+
 @app.route("/api/app/clusters/<public_id>", methods=["DELETE"])
 def api_cluster_delete(public_id):
     if not _require_dashboard_auth():

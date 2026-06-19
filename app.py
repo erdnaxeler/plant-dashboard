@@ -767,9 +767,11 @@ def device_timer_complete():
         return jsonify({"error": "invalid ml"}), 400
 
     now = _utc_now()
+    # ALWAYS update last_watering_at when device completes (even if ml=0)
+    # This prevents infinite watering loops
+    cluster.last_watering_at = now
+    cluster.last_watering_ml = round(ml, 2)
     if ml > 0:
-        cluster.last_watering_at = now
-        cluster.last_watering_ml = round(ml, 2)
         db.session.add(WateringLog(cluster_ref=cluster.id, ml=ml, created_at=now))
 
     db.session.commit()

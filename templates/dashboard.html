@@ -1352,40 +1352,38 @@
     }
 
     function localTimeToUTCHour(hours, minutes, timezone) {
-      // Create a date string in the given timezone
+      // Create a date at the specified local time in the given timezone
       const now = new Date();
-      const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
+      const year = now.getFullYear();
+      const month = now.getMonth();
+      const day = now.getDate();
       
-      // Parse with timezone offset
-      const formatter = new Intl.DateTimeFormat('en-US', {
-        timeZone: timezone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
+      // Build a date at the given hour in UTC, then convert to target timezone
+      const utcDate = new Date(Date.UTC(year, month, day, hours, minutes || 0));
+      
+      // Get what this UTC time looks like in the target timezone
+      const localStr = utcDate.toLocaleString('en-US', { 
+        timeZone: timezone, 
+        hour12: false,
         hour: '2-digit',
-        minute: '2-digit',
-        hour12: false
+        minute: '2-digit'
       });
       
-      // Get offset by comparing UTC vs local
-      const utcDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes));
-      const parts = formatter.formatToParts(new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes));
+      // Get what this UTC time looks like in UTC
+      const utcStr = utcDate.toLocaleString('en-US', { 
+        timeZone: 'UTC', 
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit'
+      });
       
-      // Simple approach: create date in local, get UTC hours
-      // This assumes the date object's timezone methods work
-      const testDate = new Date(dateStr);
-      const utcHours = new Date(testDate.toLocaleString('en-US', { timeZone: 'UTC' })).getHours();
+      // Calculate offset
+      const localHour = parseInt(localStr.split(',')[1]?.split(':')[0] || hours);
+      const utcHour = parseInt(utcStr.split(',')[1]?.split(':')[0] || hours);
+      const offset = localHour - utcHour;
       
-      // Fallback: manual calculation
-      try {
-        const localDate = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
-        const utcDateNow = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
-        const offset = (localDate - utcDateNow) / (1000 * 60 * 60);
-        return (hours - offset + 24) % 24;
-      } catch (e) {
-        // Fallback to browser timezone
-        return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes).getUTCHours();
-      }
+      // Apply reverse offset to get UTC hour from local hour
+      return (hours - offset + 24) % 24;
     }
 
     function utcHourToLocalTime(utcHour, timezone) {

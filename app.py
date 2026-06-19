@@ -135,6 +135,8 @@ class Cluster(db.Model):
     device_status = db.Column(db.String(32), nullable=False, default="not_paired")
     last_watering_at = db.Column(db.DateTime(timezone=True), nullable=True)
     last_watering_ml = db.Column(db.Float, nullable=True)
+    # Next scheduled watering time (set after each watering)
+    next_watering_at = db.Column(db.DateTime(timezone=True), nullable=True)
     # False until user taps "Start watering" in the app (calibrate, unpair, fault clear disarm).
     watering_armed = db.Column(db.Boolean, nullable=False, default=False)
     # True when user triggers manual watering (device clears after executing)
@@ -278,6 +280,22 @@ def _migrate_cluster_columns():
                 db.session.execute(
                     text(
                         "ALTER TABLE cluster ADD COLUMN timezone VARCHAR(64) DEFAULT 'UTC'"
+                    )
+                )
+            db.session.commit()
+        
+        if "next_watering_at" not in col_names:
+            if dialect == "postgresql":
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                        "next_watering_at TIMESTAMP WITH TIME ZONE"
+                    )
+                )
+            else:
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN next_watering_at DATETIME"
                     )
                 )
             db.session.commit()
@@ -428,61 +446,80 @@ def _run_segments_ms(ml_total: float, flow_ml_per_min: float) -> list[int]:
     return segments
 
 
-def _next_watering_at(cluster: Cluster) -> Optional[datetime]:
+def _calculate_next_watering_time(cluster: Cluster, from_time: datetime) -> datetime:
     """
-    Calculate next watering time using blended approach:
-    - If no preferred hour: simple interval from last watering
-    - If preferred hour set: find next preferred hour that respects 50% minimum interval
+    Calculate the next watering time from a given starting point.
+    This is used AFTER watering to set the next scheduled time.
     """
-    if not cluster.watering_group or cluster.last_watering_at is None:
-        return None
-    last = _as_utc(cluster.last_watering_at)
-    if last is None:
-        return None
-    
     interval = _interval_for_group(cluster.watering_group)
     
-    # No preferred hour: use simple interval
+    # No preferred hour: simple interval
     if cluster.preferred_watering_hour_utc is None:
-        return last + interval
+        return from_time + interval
     
-    # Blended approach: preferred hour + minimum interval
-    min_interval = interval * 0.5  # 50% minimum
-    earliest_allowed = last + min_interval
-    
-    # Find next occurrence of preferred hour (in UTC)
+    # With preferred hour: find next occurrence at that hour
     pref_hour = cluster.preferred_watering_hour_utc
+    min_interval = interval * 0.5  # Safety: at least 50% of interval
+    earliest_allowed = from_time + min_interval
     
-    # Start searching from earliest_allowed (not NOW)
-    # This makes the calculation stable across device polls
+    # Start at earliest_allowed date with preferred hour
     candidate = earliest_allowed.replace(hour=pref_hour, minute=0, second=0, microsecond=0)
     
-    # If that's before earliest_allowed, advance to next day
+    # If that's before earliest_allowed, try next day
     if candidate < earliest_allowed:
         candidate += timedelta(days=1)
     
-    # Keep advancing by days until we find a time that respects minimum interval
-    max_iterations = 14  # Safety limit
-    for _ in range(max_iterations):
+    # Keep advancing by days until we find valid time
+    for _ in range(14):
         if candidate >= earliest_allowed:
             return candidate
         candidate += timedelta(days=1)
     
-    # Fallback: just use minimum interval if something goes wrong
     return earliest_allowed
 
 
-def _schedule_slot_due(cluster: Cluster, now: datetime) -> bool:
-    """True when the UTC interval says a watering slot is open (no catch-up)."""
-    if cluster.last_watering_at is None:
+def _is_watering_time_now(cluster: Cluster, now: datetime) -> bool:
+    """
+    Check if NOW is within the 5-minute window of next_watering_at.
+    This is the ONLY check for whether to water.
+    """
+    if cluster.next_watering_at is None:
+        # First time: initialize next_watering_at
         return True
-    next_due = _next_watering_at(cluster)
-    return next_due is not None and now >= next_due
+    
+    next_time = _as_utc(cluster.next_watering_at)
+    if next_time is None:
+        return True
+    
+    # 5-minute window: water if NOW is within 5 minutes AFTER scheduled time
+    window_end = next_time + timedelta(minutes=5)
+    return next_time <= now <= window_end
+
+
+def _is_within_safety_interval(cluster: Cluster, now: datetime) -> bool:
+    """Check if we watered too recently (safety check)."""
+    if cluster.last_watering_at is None:
+        return False
+    
+    last = _as_utc(cluster.last_watering_at)
+    if last is None:
+        return False
+    
+    # Safety: don't water if watered in last hour
+    safety_interval = timedelta(hours=1)
+    return (now - last) < safety_interval
 
 
 def _cluster_timer_payload(cluster: Cluster, now: Optional[datetime] = None) -> dict[str, Any]:
+    """
+    NEW LOGIC PER USER'S EXACT FLOW:
+    1. Check if it's watering time NOW (within 5-min window of next_watering_at)
+    2. If NOT now, return water_due=False
+    3. If NOW, check safety interval
+    4. If safety violated, push next_watering_at forward and return water_due=False
+    5. If safe, return water_due=True to water (next_watering_at advances AFTER watering)
+    """
     now = _as_utc(now) or _utc_now()
-    next_at = _next_watering_at(cluster)
     out: dict[str, Any] = {
         "cluster_public_id": cluster.public_id,
         "is_calibrated": cluster.is_calibrated,
@@ -497,7 +534,9 @@ def _cluster_timer_payload(cluster: Cluster, now: Optional[datetime] = None) -> 
             cluster.last_watering_at.isoformat() if cluster.last_watering_at else None
         ),
         "last_watering_ml": cluster.last_watering_ml,
-        "next_watering_at": next_at.isoformat() if next_at else None,
+        "next_watering_at": (
+            cluster.next_watering_at.isoformat() if cluster.next_watering_at else None
+        ),
         "pump_test_mode": bool(cluster.pump_test_mode),
     }
 
@@ -520,12 +559,34 @@ def _cluster_timer_payload(cluster: Cluster, now: Optional[datetime] = None) -> 
         out["flow_ml_per_min_assumed"] = _flow_ml_per_min_for_cluster(cluster)
         return out
 
-    slot_due = _schedule_slot_due(cluster, now)
+    # STEP 1: Check if it's time NOW (within 5-min window)
+    is_time_now = _is_watering_time_now(cluster, now)
+    
+    if not is_time_now:
+        # NOT watering time - do nothing
+        out["water_due"] = False
+        out["run_segments_ms"] = []
+        out["fault"] = None
+        out["flow_ml_per_min_assumed"] = _flow_ml_per_min_for_cluster(cluster)
+        return out
+    
+    # STEP 2: It IS watering time - check safety interval
+    if _is_within_safety_interval(cluster, now):
+        # Safety violated - push next_watering_at forward by 2 hours
+        cluster.next_watering_at = now + timedelta(hours=2)
+        db.session.commit()
+        out["water_due"] = False
+        out["run_segments_ms"] = []
+        out["fault"] = None
+        out["flow_ml_per_min_assumed"] = _flow_ml_per_min_for_cluster(cluster)
+        return out
+    
+    # STEP 3: Safe to water - return water_due=True
     ml_ev = _ml_per_event(cluster)
     flow = _flow_ml_per_min_for_cluster(cluster)
-    segs = _run_segments_ms(ml_ev, flow) if slot_due and ml_ev > 0 else []
+    segs = _run_segments_ms(ml_ev, flow) if ml_ev > 0 else []
 
-    out["water_due"] = slot_due
+    out["water_due"] = True
     out["run_segments_ms"] = segs
     out["fault"] = None
     out["flow_ml_per_min_assumed"] = flow
@@ -541,9 +602,9 @@ def _cluster_status_message(cluster: Cluster) -> str:
         return "Schedule paused — tap Start watering in the app"
     if cluster.device_token and cluster.device_status == "ok":
         if cluster.is_calibrated and cluster.watering_armed:
-            if cluster.last_watering_at is None:
+            if cluster.next_watering_at is None:
                 return "Armed — first watering on next device check"
-            next_at = _next_watering_at(cluster)
+            next_at = _as_utc(cluster.next_watering_at)
             if next_at and _utc_now() < next_at:
                 return f"Armed — next watering {next_at.strftime('%Y-%m-%d %H:%M')} UTC"
         return "Device connected"
@@ -600,7 +661,7 @@ def _serialize_cluster(c: Cluster) -> dict[str, Any]:
         "preferred_watering_hour_utc": c.preferred_watering_hour_utc,
         "timezone": c.timezone or "UTC",
         "next_watering_at": (
-            _next_watering_at(c).isoformat() if _next_watering_at(c) else None
+            c.next_watering_at.isoformat() if c.next_watering_at else None
         ),
         "has_device": bool(c.device_token),
         "device_status": c.device_status,
@@ -767,15 +828,23 @@ def device_timer_complete():
         return jsonify({"error": "invalid ml"}), 400
 
     now = _utc_now()
-    # ALWAYS update last_watering_at when device completes (even if ml=0)
-    # This prevents infinite watering loops
+    # STEP 1: Update last_watering_at
     cluster.last_watering_at = now
     cluster.last_watering_ml = round(ml, 2)
+    
+    # STEP 2: Calculate and set NEXT watering time (critical!)
+    cluster.next_watering_at = _calculate_next_watering_time(cluster, now)
+    
+    # STEP 3: Log the watering if ml > 0
     if ml > 0:
         db.session.add(WateringLog(cluster_ref=cluster.id, ml=ml, created_at=now))
 
     db.session.commit()
-    return jsonify({"ok": True, "last_watering_at": cluster.last_watering_at.isoformat()})
+    return jsonify({
+        "ok": True,
+        "last_watering_at": cluster.last_watering_at.isoformat(),
+        "next_watering_at": cluster.next_watering_at.isoformat()
+    })
 
 
 @app.route("/api/app/chart")
@@ -1100,12 +1169,18 @@ def api_cluster_log_manual_watering(public_id):
     now = _utc_now()
     # Log the watering event
     db.session.add(WateringLog(cluster_ref=c.id, ml=ml, created_at=now))
-    # Update last_watering_at to reset the timer (prevents double-watering)
+    # Update last_watering_at and advance next_watering_at
     c.last_watering_at = now
     c.last_watering_ml = ml
+    c.next_watering_at = _calculate_next_watering_time(c, now)
     db.session.commit()
 
-    return jsonify({"ok": True, "ml": ml, "logged_at": now.isoformat()})
+    return jsonify({
+        "ok": True, 
+        "ml": ml, 
+        "logged_at": now.isoformat(),
+        "next_watering_at": c.next_watering_at.isoformat()
+    })
 
 
 @app.route("/api/app/clusters/<public_id>/preferred-hour", methods=["PUT"])

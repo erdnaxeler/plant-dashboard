@@ -137,6 +137,8 @@ class Cluster(db.Model):
     last_watering_ml = db.Column(db.Float, nullable=True)
     # Next scheduled watering time (set after each watering)
     next_watering_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    # Timestamp when auto-watering was triggered (prevents duplicate auto-watering)
+    auto_watering_triggered_at = db.Column(db.DateTime(timezone=True), nullable=True)
     # False until user taps "Start watering" in the app (calibrate, unpair, fault clear disarm).
     watering_armed = db.Column(db.Boolean, nullable=False, default=False)
     # True when user triggers manual watering (device clears after executing)
@@ -296,6 +298,22 @@ def _migrate_cluster_columns():
                 db.session.execute(
                     text(
                         "ALTER TABLE cluster ADD COLUMN next_watering_at DATETIME"
+                    )
+                )
+            db.session.commit()
+        
+        if "auto_watering_triggered_at" not in col_names:
+            if dialect == "postgresql":
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                        "auto_watering_triggered_at TIMESTAMP WITH TIME ZONE"
+                    )
+                )
+            else:
+                db.session.execute(
+                    text(
+                        "ALTER TABLE cluster ADD COLUMN auto_watering_triggered_at DATETIME"
                     )
                 )
             db.session.commit()
@@ -552,7 +570,16 @@ def _cluster_timer_payload(cluster: Cluster, now: Optional[datetime] = None) -> 
         out["flow_ml_per_min_assumed"] = _flow_ml_per_min_for_cluster(cluster)
         return out
 
-    # STEP 1: Check if it's time NOW (within 5-min window)
+    # STEP 1: Check if auto-watering was already triggered (prevents duplicate triggers)
+    if cluster.auto_watering_triggered_at is not None:
+        # Auto-watering already in progress - wait for it to complete
+        out["water_due"] = False
+        out["run_segments_ms"] = []
+        out["fault"] = None
+        out["flow_ml_per_min_assumed"] = _flow_ml_per_min_for_cluster(cluster)
+        return out
+    
+    # STEP 2: Check if it's time NOW (within 5-min window)
     is_time_now = _is_watering_time_now(cluster, now)
     
     if not is_time_now:
@@ -563,7 +590,7 @@ def _cluster_timer_payload(cluster: Cluster, now: Optional[datetime] = None) -> 
         out["flow_ml_per_min_assumed"] = _flow_ml_per_min_for_cluster(cluster)
         return out
     
-    # STEP 2: It IS watering time - check safety interval
+    # STEP 3: It IS watering time - check safety interval
     if _is_within_safety_interval(cluster, now):
         # Safety violated - push next_watering_at forward by 2 hours
         cluster.next_watering_at = now + timedelta(hours=2)
@@ -574,7 +601,11 @@ def _cluster_timer_payload(cluster: Cluster, now: Optional[datetime] = None) -> 
         out["flow_ml_per_min_assumed"] = _flow_ml_per_min_for_cluster(cluster)
         return out
     
-    # STEP 3: Safe to water - return water_due=True
+    # STEP 3: Safe to water - SET THE TRIGGER FLAG and return water_due=True
+    # This prevents duplicate auto-watering if the watering takes a long time
+    cluster.auto_watering_triggered_at = now
+    db.session.commit()
+    
     ml_ev = _ml_per_event(cluster)
     flow = _flow_ml_per_min_for_cluster(cluster)
     segs = _run_segments_ms(ml_ev, flow) if ml_ev > 0 else []
@@ -828,9 +859,10 @@ def device_timer_complete():
         return jsonify({"error": "invalid ml"}), 400
 
     now = _utc_now()
-    # STEP 1: Update last_watering_at
+    # STEP 1: Update last_watering_at and clear the triggered flag
     cluster.last_watering_at = now
     cluster.last_watering_ml = round(ml, 2)
+    cluster.auto_watering_triggered_at = None  # Clear the trigger flag on completion
     
     # STEP 2: Calculate and set NEXT watering time (critical!)
     cluster.next_watering_at = _calculate_next_watering_time(cluster, now)

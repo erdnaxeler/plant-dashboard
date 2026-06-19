@@ -464,10 +464,14 @@ def _run_segments_ms(ml_total: float, flow_ml_per_min: float) -> list[int]:
     return segments
 
 
-def _calculate_next_watering_time(cluster: Cluster, from_time: datetime) -> datetime:
+def _calculate_next_watering_time(cluster: Cluster, from_time: datetime, skip_interval: bool = False) -> datetime:
     """
     Calculate the next watering time from a given starting point.
-    Simple: from_time + interval, then snap to preferred hour if set.
+    
+    Args:
+        cluster: The cluster to calculate for
+        from_time: The reference time to calculate from
+        skip_interval: If True, don't add the full interval (used for manual watering)
     """
     interval = _interval_for_group(cluster.watering_group)
     
@@ -475,18 +479,22 @@ def _calculate_next_watering_time(cluster: Cluster, from_time: datetime) -> date
     if cluster.preferred_watering_hour_utc is None:
         return from_time + interval
     
-    # With preferred hour: add full interval, then find next occurrence of that hour
+    # With preferred hour
     pref_hour = cluster.preferred_watering_hour_utc
-    earliest_allowed = from_time + interval
     
-    # Find next occurrence of preferred hour AT OR AFTER earliest_allowed
-    candidate = earliest_allowed.replace(hour=pref_hour, minute=0, second=0, microsecond=0)
-    
-    # If candidate is before earliest_allowed, advance by 1 day
-    while candidate < earliest_allowed:
-        candidate += timedelta(days=1)
-    
-    return candidate
+    if skip_interval:
+        # For manual watering: just find next occurrence of preferred hour
+        candidate = from_time.replace(hour=pref_hour, minute=0, second=0, microsecond=0)
+        if candidate <= from_time:
+            candidate += timedelta(days=1)
+        return candidate
+    else:
+        # For auto watering: add full interval, then find next occurrence of that hour
+        earliest_allowed = from_time + interval
+        candidate = earliest_allowed.replace(hour=pref_hour, minute=0, second=0, microsecond=0)
+        while candidate < earliest_allowed:
+            candidate += timedelta(days=1)
+        return candidate
 
 
 def _is_watering_time_now(cluster: Cluster, now: datetime) -> bool:
@@ -1217,7 +1225,8 @@ def api_cluster_log_manual_watering(public_id):
     # Update last_watering_at and advance next_watering_at
     c.last_watering_at = now
     c.last_watering_ml = ml
-    c.next_watering_at = _calculate_next_watering_time(c, now)
+    # For manual watering: skip interval, just find next preferred hour
+    c.next_watering_at = _calculate_next_watering_time(c, now, skip_interval=True)
     db.session.commit()
 
     return jsonify({

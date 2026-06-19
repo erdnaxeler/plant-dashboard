@@ -1059,6 +1059,8 @@ def api_cluster_pause_watering(public_id):
         return jsonify({"error": "not found"}), 404
 
     c.watering_armed = False
+    # Clear schedule when pausing - will recalculate on restart
+    c.next_watering_at = None
     db.session.commit()
     return jsonify(_serialize_cluster(c))
 

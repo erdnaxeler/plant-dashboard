@@ -484,12 +484,12 @@ def _is_watering_time_now(cluster: Cluster, now: datetime) -> bool:
     This is the ONLY check for whether to water.
     """
     if cluster.next_watering_at is None:
-        # First time: initialize next_watering_at
-        return True
+        # No schedule set - DO NOT water
+        return False
     
     next_time = _as_utc(cluster.next_watering_at)
     if next_time is None:
-        return True
+        return False
     
     # 5-minute window: water if NOW is within 5 minutes AFTER scheduled time
     window_end = next_time + timedelta(minutes=5)
@@ -1033,6 +1033,17 @@ def api_cluster_start_watering(public_id):
         return jsonify({"error": "clear pump fault before starting"}), 400
 
     c.watering_armed = True
+    
+    # CRITICAL: Initialize next_watering_at if it's not set
+    # Otherwise it will water immediately (NULL check returns True)
+    if c.next_watering_at is None:
+        if c.last_watering_at:
+            # Has watered before - calculate from last watering
+            c.next_watering_at = _calculate_next_watering_time(c, c.last_watering_at)
+        else:
+            # Never watered - schedule for full interval from now
+            c.next_watering_at = _calculate_next_watering_time(c, _utc_now())
+    
     if c.device_token and c.device_status != "fault_pump_max":
         c.device_status = "ok"
     db.session.commit()

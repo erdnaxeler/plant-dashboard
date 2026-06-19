@@ -645,6 +645,13 @@ def _serialize_cluster(c: Cluster) -> dict[str, Any]:
         {"id": p.id, "name": p.name, "watering_group": p.watering_group}
         for p in sorted(c.catalog_plants, key=lambda x: (x.sort_order, x.name))
     ]
+    
+    # AUTO-INITIALIZE next_watering_at if it's null and cluster is calibrated
+    if c.is_calibrated and c.next_watering_at is None and c.watering_group:
+        base_time = c.last_watering_at if c.last_watering_at else _utc_now()
+        c.next_watering_at = _calculate_next_watering_time(c, base_time)
+        db.session.commit()
+    
     return {
         "id": c.id,
         "public_id": c.public_id,

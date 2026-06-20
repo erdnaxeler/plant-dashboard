@@ -3,6 +3,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from flask import (
     Flask,
@@ -32,7 +33,7 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
 
-# ml/week by pot size (row) × watering group (column) — indoor presets
+# ml/week by pot size (row) x watering group (column) - indoor presets
 WATERING_TABLE_ML_WEEK: dict[str, dict[str, int]] = {
     "5.5x4.5": {"daily": 200, "twice_weekly": 200, "weekly": 150},
     "8x7": {"daily": 400, "twice_weekly": 350, "weekly": 250},
@@ -48,7 +49,6 @@ WATERING_GROUP_EVENTS_PER_WEEK = {
     "weekly": 1,
 }
 
-# Placeholder flow rates (ml/min) by number of plants on shared pump — replace when measured
 PLANT_COUNT_FLOW_ML_PER_MIN: dict[int, float] = {
     1: 30.0,
     2: 22.0,
@@ -135,19 +135,18 @@ class Cluster(db.Model):
     device_status = db.Column(db.String(32), nullable=False, default="not_paired")
     last_watering_at = db.Column(db.DateTime(timezone=True), nullable=True)
     last_watering_ml = db.Column(db.Float, nullable=True)
-    # Next scheduled watering time (set after each watering)
     next_watering_at = db.Column(db.DateTime(timezone=True), nullable=True)
-    # Timestamp when auto-watering was triggered (prevents duplicate auto-watering)
+    # NOTE: kept for backward-compatible schema/migrations only. No longer
+    # read or written anywhere in the scheduling logic (see CHANGE 1).
     auto_watering_triggered_at = db.Column(db.DateTime(timezone=True), nullable=True)
-    # False until user taps "Start watering" in the app (calibrate, unpair, fault clear disarm).
     watering_armed = db.Column(db.Boolean, nullable=False, default=False)
-    # True when user triggers manual watering (device clears after executing)
     manual_water_trigger = db.Column(db.Boolean, nullable=False, default=False)
-    # True when pump test mode is active (toggle on/off for hardware testing)
     pump_test_mode = db.Column(db.Boolean, nullable=False, default=False)
-    # Preferred hour of day for watering in UTC (0-23), None = anytime
     preferred_watering_hour_utc = db.Column(db.Integer, nullable=True)
-    # User's timezone for display/input (e.g., "America/New_York"), defaults to UTC
+    # Timezone of the plants' physical location (e.g. "America/New_York").
+    # Location-bound, not user-bound - should NOT change when the user
+    # travels, only if the plants move. Used for (a) the dashboard's
+    # local<->UTC hour conversion and (b) _local_date / same-day dedup.
     timezone = db.Column(db.String(64), nullable=True, default="UTC")
     last_device_ping_at = db.Column(db.DateTime(timezone=True), nullable=True)
     created_at = db.Column(
@@ -195,127 +194,98 @@ def _migrate_cluster_columns():
         if "cluster" not in insp.get_table_names():
             return
         col_names = {c["name"] for c in insp.get_columns("cluster")}
-        
+
         dialect = db.engine.dialect.name
-        
+
         if "watering_armed" not in col_names:
             if dialect == "postgresql":
-                db.session.execute(
-                    text(
-                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
-                        "watering_armed BOOLEAN NOT NULL DEFAULT FALSE"
-                    )
-                )
+                db.session.execute(text(
+                    "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                    "watering_armed BOOLEAN NOT NULL DEFAULT FALSE"
+                ))
             else:
-                db.session.execute(
-                    text(
-                        "ALTER TABLE cluster ADD COLUMN watering_armed "
-                        "BOOLEAN NOT NULL DEFAULT 0"
-                    )
-                )
+                db.session.execute(text(
+                    "ALTER TABLE cluster ADD COLUMN watering_armed "
+                    "BOOLEAN NOT NULL DEFAULT 0"
+                ))
             db.session.commit()
-            # Keep existing schedules running for clusters already watering.
             Cluster.query.filter(Cluster.last_watering_at.isnot(None)).update(
                 {Cluster.watering_armed: True}, synchronize_session=False
             )
             db.session.commit()
-        
+
         if "manual_water_trigger" not in col_names:
             if dialect == "postgresql":
-                db.session.execute(
-                    text(
-                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
-                        "manual_water_trigger BOOLEAN NOT NULL DEFAULT FALSE"
-                    )
-                )
+                db.session.execute(text(
+                    "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                    "manual_water_trigger BOOLEAN NOT NULL DEFAULT FALSE"
+                ))
             else:
-                db.session.execute(
-                    text(
-                        "ALTER TABLE cluster ADD COLUMN manual_water_trigger "
-                        "BOOLEAN NOT NULL DEFAULT 0"
-                    )
-                )
+                db.session.execute(text(
+                    "ALTER TABLE cluster ADD COLUMN manual_water_trigger "
+                    "BOOLEAN NOT NULL DEFAULT 0"
+                ))
             db.session.commit()
-        
+
         if "pump_test_mode" not in col_names:
             if dialect == "postgresql":
-                db.session.execute(
-                    text(
-                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
-                        "pump_test_mode BOOLEAN NOT NULL DEFAULT FALSE"
-                    )
-                )
+                db.session.execute(text(
+                    "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                    "pump_test_mode BOOLEAN NOT NULL DEFAULT FALSE"
+                ))
             else:
-                db.session.execute(
-                    text(
-                        "ALTER TABLE cluster ADD COLUMN pump_test_mode "
-                        "BOOLEAN NOT NULL DEFAULT 0"
-                    )
-                )
+                db.session.execute(text(
+                    "ALTER TABLE cluster ADD COLUMN pump_test_mode "
+                    "BOOLEAN NOT NULL DEFAULT 0"
+                ))
             db.session.commit()
-        
+
         if "preferred_watering_hour_utc" not in col_names:
             if dialect == "postgresql":
-                db.session.execute(
-                    text(
-                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
-                        "preferred_watering_hour_utc INTEGER"
-                    )
-                )
+                db.session.execute(text(
+                    "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                    "preferred_watering_hour_utc INTEGER"
+                ))
             else:
-                db.session.execute(
-                    text(
-                        "ALTER TABLE cluster ADD COLUMN preferred_watering_hour_utc INTEGER"
-                    )
-                )
+                db.session.execute(text(
+                    "ALTER TABLE cluster ADD COLUMN preferred_watering_hour_utc INTEGER"
+                ))
             db.session.commit()
-        
+
         if "timezone" not in col_names:
             if dialect == "postgresql":
-                db.session.execute(
-                    text(
-                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
-                        "timezone VARCHAR(64) DEFAULT 'UTC'"
-                    )
-                )
+                db.session.execute(text(
+                    "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                    "timezone VARCHAR(64) DEFAULT 'UTC'"
+                ))
             else:
-                db.session.execute(
-                    text(
-                        "ALTER TABLE cluster ADD COLUMN timezone VARCHAR(64) DEFAULT 'UTC'"
-                    )
-                )
+                db.session.execute(text(
+                    "ALTER TABLE cluster ADD COLUMN timezone VARCHAR(64) DEFAULT 'UTC'"
+                ))
             db.session.commit()
-        
+
         if "next_watering_at" not in col_names:
             if dialect == "postgresql":
-                db.session.execute(
-                    text(
-                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
-                        "next_watering_at TIMESTAMP WITH TIME ZONE"
-                    )
-                )
+                db.session.execute(text(
+                    "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                    "next_watering_at TIMESTAMP WITH TIME ZONE"
+                ))
             else:
-                db.session.execute(
-                    text(
-                        "ALTER TABLE cluster ADD COLUMN next_watering_at DATETIME"
-                    )
-                )
+                db.session.execute(text(
+                    "ALTER TABLE cluster ADD COLUMN next_watering_at DATETIME"
+                ))
             db.session.commit()
-        
+
         if "auto_watering_triggered_at" not in col_names:
             if dialect == "postgresql":
-                db.session.execute(
-                    text(
-                        "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
-                        "auto_watering_triggered_at TIMESTAMP WITH TIME ZONE"
-                    )
-                )
+                db.session.execute(text(
+                    "ALTER TABLE cluster ADD COLUMN IF NOT EXISTS "
+                    "auto_watering_triggered_at TIMESTAMP WITH TIME ZONE"
+                ))
             else:
-                db.session.execute(
-                    text(
-                        "ALTER TABLE cluster ADD COLUMN auto_watering_triggered_at DATETIME"
-                    )
-                )
+                db.session.execute(text(
+                    "ALTER TABLE cluster ADD COLUMN auto_watering_triggered_at DATETIME"
+                ))
             db.session.commit()
     except Exception:
         db.session.rollback()
@@ -334,9 +304,7 @@ def _seed_catalog_plants():
         ("Sage", "weekly", 70),
     ]
     for name, group, order in rows:
-        db.session.add(
-            CatalogPlant(name=name, watering_group=group, sort_order=order)
-        )
+        db.session.add(CatalogPlant(name=name, watering_group=group, sort_order=order))
     db.session.commit()
 
 
@@ -353,7 +321,6 @@ def _validate_thresholds(start_threshold, stop_threshold) -> Optional[str]:
 def _parse_timestamp(value):
     if not value:
         return datetime.now(timezone.utc)
-
     try:
         if isinstance(value, str) and value.endswith("Z"):
             value = value[:-1] + "+00:00"
@@ -376,15 +343,32 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _cluster_zoneinfo(cluster: "Cluster") -> ZoneInfo:
+    """Resolve a cluster's timezone string to a ZoneInfo, falling back to
+    UTC for any invalid/unknown zone name."""
+    tz_name = (cluster.timezone or "UTC").strip() or "UTC"
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        return ZoneInfo("UTC")
+
+
+def _local_date(cluster: "Cluster", instant: datetime):
+    """Convert a UTC-aware instant to the calendar date in the cluster's
+    local timezone (the plants' physical location). This is the single
+    place "what day is it for this cluster" is decided."""
+    instant = _as_utc(instant) or _utc_now()
+    tz = _cluster_zoneinfo(cluster)
+    return instant.astimezone(tz).date()
+
+
 def _require_device_auth():
     expected_token = os.getenv("DEVICE_API_TOKEN", "").strip()
     if not expected_token:
         return False
-
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         return auth_header.replace("Bearer ", "").strip() == expected_token
-
     return False
 
 
@@ -392,11 +376,9 @@ def _require_dashboard_auth():
     password = os.getenv("DASHBOARD_PASSWORD", "").strip()
     if not password:
         return True
-
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         return auth_header.replace("Bearer ", "").strip() == password
-
     return False
 
 
@@ -467,29 +449,36 @@ def _run_segments_ms(ml_total: float, flow_ml_per_min: float) -> list[int]:
 def _calculate_next_watering_time(cluster: Cluster, from_time: datetime, skip_interval: bool = False) -> datetime:
     """
     Calculate the next watering time from a given starting point.
-    
-    Args:
-        cluster: The cluster to calculate for
-        from_time: The reference time to calculate from
-        skip_interval: If True, don't add the full interval (used for manual watering)
+
+    CHANGE 2 (overdue guard): if from_time is already at least one full
+    interval in the past relative to now, the cluster is overdue - return
+    `now` directly instead of computing a candidate that would still land
+    in the past. Only applies to the auto-watering path (skip_interval=False).
     """
     interval = _interval_for_group(cluster.watering_group)
-    
-    # No preferred hour: simple interval from last watering
+
+    # Defensively normalize from_time - callers usually pass an already-UTC
+    # value, but DB-sourced datetimes can come back naive depending on the
+    # backend (e.g. SQLite silently drops tzinfo even on a
+    # DateTime(timezone=True) column; Postgres does not). Same convention
+    # as every other DB-sourced datetime in this file.
+    from_time = _as_utc(from_time) or _utc_now()
+
+    now = _utc_now()
+    if not skip_interval and (now - from_time) >= interval:
+        return now
+
     if cluster.preferred_watering_hour_utc is None:
         return from_time + interval
-    
-    # With preferred hour
+
     pref_hour = cluster.preferred_watering_hour_utc
-    
+
     if skip_interval:
-        # For manual watering: just find next occurrence of preferred hour
         candidate = from_time.replace(hour=pref_hour, minute=0, second=0, microsecond=0)
         if candidate <= from_time:
             candidate += timedelta(days=1)
         return candidate
     else:
-        # For auto watering: add full interval, then find next occurrence of that hour
         earliest_allowed = from_time + interval
         candidate = earliest_allowed.replace(hour=pref_hour, minute=0, second=0, microsecond=0)
         while candidate < earliest_allowed:
@@ -498,45 +487,39 @@ def _calculate_next_watering_time(cluster: Cluster, from_time: datetime, skip_in
 
 
 def _is_watering_time_now(cluster: Cluster, now: datetime) -> bool:
-    """
-    Check if NOW is within the 5-minute window of next_watering_at.
-    This is the ONLY check for whether to water.
-    """
+    """Check if NOW is within the 5-minute window of next_watering_at."""
     if cluster.next_watering_at is None:
-        # No schedule set - DO NOT water
         return False
-    
     next_time = _as_utc(cluster.next_watering_at)
     if next_time is None:
         return False
-    
-    # 5-minute window: water if NOW is within 5 minutes AFTER scheduled time
     window_end = next_time + timedelta(minutes=5)
     return next_time <= now <= window_end
 
 
-def _is_within_safety_interval(cluster: Cluster, now: datetime) -> bool:
-    """Check if we watered too recently (safety check)."""
+def _already_watered_today(cluster: Cluster, now: datetime) -> bool:
+    """
+    CHANGE 3/4: Replacement for the old 1-hour rolling safety interval.
+    Returns True if cluster.last_watering_at falls on the same LOCAL
+    calendar date as `now`, using the cluster's own timezone (_local_date).
+    Covers both auto-watering and manual watering, since
+    log-manual-watering also sets last_watering_at = now.
+    """
     if cluster.last_watering_at is None:
         return False
-    
     last = _as_utc(cluster.last_watering_at)
     if last is None:
         return False
-    
-    # Safety: don't water if watered in last hour
-    safety_interval = timedelta(hours=1)
-    return (now - last) < safety_interval
+    return _local_date(cluster, last) == _local_date(cluster, now)
 
 
 def _cluster_timer_payload(cluster: Cluster, now: Optional[datetime] = None) -> dict[str, Any]:
     """
-    NEW LOGIC PER USER'S EXACT FLOW:
-    1. Check if it's watering time NOW (within 5-min window of next_watering_at)
-    2. If NOT now, return water_due=False
-    3. If NOW, check safety interval
-    4. If safety violated, push next_watering_at forward and return water_due=False
-    5. If safe, return water_due=True to water (next_watering_at advances AFTER watering)
+    CORE WATERING LOGIC.
+
+    CHANGE 1: auto_watering_triggered_at guard removed entirely.
+    CHANGE 3/4: 1-hour safety interval replaced with _already_watered_today
+    (local calendar date via cluster.timezone).
     """
     now = _as_utc(now) or _utc_now()
     out: dict[str, Any] = {
@@ -578,42 +561,27 @@ def _cluster_timer_payload(cluster: Cluster, now: Optional[datetime] = None) -> 
         out["flow_ml_per_min_assumed"] = _flow_ml_per_min_for_cluster(cluster)
         return out
 
-    # STEP 1: Check if auto-watering was already triggered (prevents duplicate triggers)
-    if cluster.auto_watering_triggered_at is not None:
-        # Auto-watering already in progress - wait for it to complete
-        out["water_due"] = False
-        out["run_segments_ms"] = []
-        out["fault"] = None
-        out["flow_ml_per_min_assumed"] = _flow_ml_per_min_for_cluster(cluster)
-        return out
-    
-    # STEP 2: Check if it's time NOW (within 5-min window)
+    # CHANGE 1: auto_watering_triggered_at guard removed (was here previously).
+
     is_time_now = _is_watering_time_now(cluster, now)
-    
     if not is_time_now:
-        # NOT watering time - do nothing
         out["water_due"] = False
         out["run_segments_ms"] = []
         out["fault"] = None
         out["flow_ml_per_min_assumed"] = _flow_ml_per_min_for_cluster(cluster)
         return out
-    
-    # STEP 3: It IS watering time - check safety interval
-    if _is_within_safety_interval(cluster, now):
-        # Safety violated - push next_watering_at forward by 2 hours
-        cluster.next_watering_at = now + timedelta(hours=2)
+
+    # CHANGE 3/4: already-watered-today check (local calendar date)
+    if _already_watered_today(cluster, now):
+        cluster.next_watering_at = _calculate_next_watering_time(cluster, cluster.last_watering_at)
         db.session.commit()
         out["water_due"] = False
         out["run_segments_ms"] = []
         out["fault"] = None
         out["flow_ml_per_min_assumed"] = _flow_ml_per_min_for_cluster(cluster)
+        out["next_watering_at"] = cluster.next_watering_at.isoformat()
         return out
-    
-    # STEP 3: Safe to water - SET THE TRIGGER FLAG and return water_due=True
-    # This prevents duplicate auto-watering if the watering takes a long time
-    cluster.auto_watering_triggered_at = now
-    db.session.commit()
-    
+
     ml_ev = _ml_per_event(cluster)
     flow = _flow_ml_per_min_for_cluster(cluster)
     segs = _run_segments_ms(ml_ev, flow) if ml_ev > 0 else []
@@ -630,15 +598,15 @@ def _cluster_status_message(cluster: Cluster) -> str:
         return "Device disconnected: max pump time exceeded"
     if cluster.is_calibrated and not cluster.watering_armed:
         if not cluster.device_token:
-            return "Calibrated — pair device, then tap Start watering"
-        return "Schedule paused — tap Start watering in the app"
+            return "Calibrated - pair device, then tap Start watering"
+        return "Schedule paused - tap Start watering in the app"
     if cluster.device_token and cluster.device_status == "ok":
         if cluster.is_calibrated and cluster.watering_armed:
             if cluster.next_watering_at is None:
-                return "Armed — first watering on next device check"
+                return "Armed - first watering on next device check"
             next_at = _as_utc(cluster.next_watering_at)
             if next_at and _utc_now() < next_at:
-                return f"Armed — next watering {next_at.strftime('%Y-%m-%d %H:%M')} UTC"
+                return f"Armed - next watering {next_at.strftime('%Y-%m-%d %H:%M')} UTC"
         return "Device connected"
     if cluster.is_calibrated and not cluster.device_token:
         return "Awaiting device pairing"
@@ -649,16 +617,13 @@ def _cluster_status_message(cluster: Cluster) -> str:
 
 def _get_or_create_plant(plant_id, plant_name):
     plant = Plant.query.filter_by(plant_id=plant_id).first()
-
     if plant:
         if plant_name and plant.plant_name != plant_name:
             plant.plant_name = plant_name
         return plant
-
     plant = Plant(plant_id=plant_id, plant_name=plant_name or plant_id)
     db.session.add(plant)
     db.session.flush()
-
     db.session.add(PlantSetting(plant_ref=plant.id))
     return plant
 
@@ -677,13 +642,15 @@ def _serialize_cluster(c: Cluster) -> dict[str, Any]:
         {"id": p.id, "name": p.name, "watering_group": p.watering_group}
         for p in sorted(c.catalog_plants, key=lambda x: (x.sort_order, x.name))
     ]
-    
-    # AUTO-INITIALIZE next_watering_at if it's null and cluster is calibrated
+
+    # AUTO-INITIALIZE next_watering_at if null and calibrated. Uses
+    # _calculate_next_watering_time, which includes the overdue guard
+    # (CHANGE 2), so this can't produce a past timestamp.
     if c.is_calibrated and c.next_watering_at is None and c.watering_group:
         base_time = c.last_watering_at if c.last_watering_at else _utc_now()
         c.next_watering_at = _calculate_next_watering_time(c, base_time)
         db.session.commit()
-    
+
     return {
         "id": c.id,
         "public_id": c.public_id,
@@ -740,7 +707,6 @@ def device_telemetry():
 
     payload = request.get_json() or {}
     plant_id = payload.get("plant_id")
-
     if not plant_id:
         return jsonify({"error": "plant_id required"}), 400
 
@@ -757,10 +723,8 @@ def device_telemetry():
         moisture=moisture,
         created_at=_parse_timestamp(payload.get("timestamp")),
     )
-
     db.session.add(reading)
     db.session.commit()
-
     return jsonify({"ok": True})
 
 
@@ -768,23 +732,18 @@ def device_telemetry():
 def device_settings():
     if not _require_device_auth():
         return jsonify({"error": "Unauthorized"}), 401
-
     plant_id = request.args.get("plant_id")
-
     plant = _get_or_create_plant(plant_id, None)
     settings = _plant_settings(plant.id)
-
-    return jsonify(
-        {
-            "start_threshold": settings.start_threshold,
-            "stop_threshold": settings.stop_threshold,
-        }
-    )
+    return jsonify({
+        "start_threshold": settings.start_threshold,
+        "stop_threshold": settings.stop_threshold,
+    })
 
 
 @app.route("/api/device/pair", methods=["POST"])
 def device_pair():
-    """Link a physical device to a cluster using a short-lived pairing code (no prior token)."""
+    """Link a physical device to a cluster using a short-lived pairing code."""
     try:
         payload = request.get_json(silent=True) or {}
         raw = payload.get("pairing_code", "")
@@ -811,13 +770,11 @@ def device_pair():
         cluster.device_status = "ok"
         db.session.commit()
 
-        return jsonify(
-            {
-                "ok": True,
-                "device_token": token,
-                "cluster_public_id": cluster.public_id,
-            }
-        )
+        return jsonify({
+            "ok": True,
+            "device_token": token,
+            "cluster_public_id": cluster.public_id,
+        })
     except Exception as exc:
         db.session.rollback()
         app.logger.exception("device_pair failed")
@@ -827,7 +784,7 @@ def device_pair():
 @app.route("/api/build")
 def api_build():
     """Lets you verify Railway is running the latest app (check after deploy)."""
-    return jsonify({"build": "2026-05-23-pairing-fix-v2"})
+    return jsonify({"build": "2026-06-20-watering-fixes-v1"})
 
 
 @app.route("/api/device/timer/state", methods=["GET"])
@@ -835,10 +792,8 @@ def device_timer_state():
     cluster = _cluster_from_bearer()
     if not cluster:
         return jsonify({"error": "Unauthorized"}), 401
-
     cluster.last_device_ping_at = _utc_now()
     db.session.commit()
-
     payload = _cluster_timer_payload(cluster)
     return jsonify(payload)
 
@@ -867,15 +822,13 @@ def device_timer_complete():
         return jsonify({"error": "invalid ml"}), 400
 
     now = _utc_now()
-    # STEP 1: Update last_watering_at and clear the triggered flag
     cluster.last_watering_at = now
     cluster.last_watering_ml = round(ml, 2)
-    cluster.auto_watering_triggered_at = None  # Clear the trigger flag on completion
-    
-    # STEP 2: Calculate and set NEXT watering time (critical!)
+    # NOTE: auto_watering_triggered_at clear removed (CHANGE 1) - field is
+    # no longer used anywhere in the scheduling flow.
+
     cluster.next_watering_at = _calculate_next_watering_time(cluster, now)
-    
-    # STEP 3: Log the watering if ml > 0
+
     if ml > 0:
         db.session.add(WateringLog(cluster_ref=cluster.id, ml=ml, created_at=now))
 
@@ -893,23 +846,18 @@ def chart_data():
         return jsonify({"error": "Unauthorized"}), 401
 
     plant_id = request.args.get("plant_id")
-
     plant = Plant.query.filter_by(plant_id=plant_id).first()
     if not plant:
         return jsonify([])
 
     query = MoistureReading.query.filter_by(plant_ref=plant.id)
-
     days = request.args.get("days", type=int)
     if days and days > 0:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         query = query.filter(MoistureReading.created_at >= cutoff)
 
     readings = query.order_by(MoistureReading.created_at.asc()).all()
-
-    return jsonify(
-        [{"time": r.created_at.isoformat(), "moisture": r.moisture} for r in readings]
-    )
+    return jsonify([{"time": r.created_at.isoformat(), "moisture": r.moisture} for r in readings])
 
 
 @app.route("/api/app/cluster/<public_id>/waterings")
@@ -936,7 +884,6 @@ def api_plants():
         return jsonify({"error": "Unauthorized"}), 401
     plants = Plant.query.order_by(Plant.plant_name).all()
     result = []
-
     for p in plants:
         settings = _plant_settings(p.id)
         latest = (
@@ -944,17 +891,14 @@ def api_plants():
             .order_by(desc(MoistureReading.created_at))
             .first()
         )
-        result.append(
-            {
-                "plant_id": p.plant_id,
-                "plant_name": p.plant_name,
-                "start_threshold": settings.start_threshold,
-                "stop_threshold": settings.stop_threshold,
-                "latest_moisture": latest.moisture if latest else None,
-                "latest_time": latest.created_at.isoformat() if latest else None,
-            }
-        )
-
+        result.append({
+            "plant_id": p.plant_id,
+            "plant_name": p.plant_name,
+            "start_threshold": settings.start_threshold,
+            "stop_threshold": settings.stop_threshold,
+            "latest_moisture": latest.moisture if latest else None,
+            "latest_time": latest.created_at.isoformat() if latest else None,
+        })
     db.session.commit()
     return jsonify(result)
 
@@ -968,12 +912,7 @@ def api_catalog_plants():
         .order_by(CatalogPlant.sort_order, CatalogPlant.name)
         .all()
     )
-    return jsonify(
-        [
-            {"id": r.id, "name": r.name, "watering_group": r.watering_group}
-            for r in rows
-        ]
-    )
+    return jsonify([{"id": r.id, "name": r.name, "watering_group": r.watering_group} for r in rows])
 
 
 @app.route("/api/app/clusters", methods=["GET"])
@@ -1020,7 +959,6 @@ def api_cluster_calibrate(public_id):
 
     if pot_size not in WATERING_TABLE_ML_WEEK:
         return jsonify({"error": "invalid pot_size", "allowed": list(POT_SIZES)}), 400
-
     if not isinstance(ids, list) or not (1 <= len(ids) <= 3):
         return jsonify({"error": "catalog_plant_ids must be a list of 1 to 3 ids"}), 400
 
@@ -1073,17 +1011,15 @@ def api_cluster_start_watering(public_id):
         return jsonify({"error": "clear pump fault before starting"}), 400
 
     c.watering_armed = True
-    
-    # CRITICAL: Initialize next_watering_at if it's not set
-    # Otherwise it will water immediately (NULL check returns True)
+
+    # _calculate_next_watering_time includes the overdue guard (CHANGE 2),
+    # so even if last_watering_at is stale, this can't land in the past.
     if c.next_watering_at is None:
         if c.last_watering_at:
-            # Has watered before - calculate from last watering
             c.next_watering_at = _calculate_next_watering_time(c, c.last_watering_at)
         else:
-            # Never watered - schedule for full interval from now
             c.next_watering_at = _calculate_next_watering_time(c, _utc_now())
-    
+
     if c.device_token and c.device_status != "fault_pump_max":
         c.device_status = "ok"
     db.session.commit()
@@ -1099,7 +1035,6 @@ def api_cluster_pause_watering(public_id):
         return jsonify({"error": "not found"}), 404
 
     c.watering_armed = False
-    # Clear schedule when pausing - will recalculate on restart
     c.next_watering_at = None
     db.session.commit()
     return jsonify(_serialize_cluster(c))
@@ -1147,12 +1082,10 @@ def api_cluster_pairing_code(public_id):
             c.pairing_code = code
             c.pairing_expires_at = _utc_now() + timedelta(minutes=30)
             db.session.commit()
-            return jsonify(
-                {
-                    "pairing_code": code,
-                    "pairing_expires_at": c.pairing_expires_at.isoformat(),
-                }
-            )
+            return jsonify({
+                "pairing_code": code,
+                "pairing_expires_at": c.pairing_expires_at.isoformat(),
+            })
 
     return jsonify({"error": "could not allocate pairing code"}), 500
 
@@ -1220,18 +1153,15 @@ def api_cluster_log_manual_watering(public_id):
         return jsonify({"error": "no watering amount configured"}), 400
 
     now = _utc_now()
-    # Log the watering event
     db.session.add(WateringLog(cluster_ref=c.id, ml=ml, created_at=now))
-    # Update last_watering_at and advance next_watering_at
     c.last_watering_at = now
     c.last_watering_ml = ml
-    # For manual watering: skip interval, just find next preferred hour
     c.next_watering_at = _calculate_next_watering_time(c, now, skip_interval=True)
     db.session.commit()
 
     return jsonify({
-        "ok": True, 
-        "ml": ml, 
+        "ok": True,
+        "ml": ml,
         "logged_at": now.isoformat(),
         "next_watering_at": c.next_watering_at.isoformat()
     })
@@ -1250,22 +1180,20 @@ def api_cluster_preferred_hour(public_id):
 
     payload = request.get_json() or {}
     hour = payload.get("preferred_watering_hour_utc")
-    
-    # Allow null to clear the preference
+
     if hour is None:
         c.preferred_watering_hour_utc = None
         db.session.commit()
         return jsonify(_serialize_cluster(c))
-    
-    # Validate hour range
+
     try:
         hour = int(hour)
     except (TypeError, ValueError):
         return jsonify({"error": "preferred_watering_hour_utc must be an integer or null"}), 400
-    
+
     if hour < 0 or hour > 23:
         return jsonify({"error": "preferred_watering_hour_utc must be between 0 and 23"}), 400
-    
+
     c.preferred_watering_hour_utc = hour
     db.session.commit()
     return jsonify(_serialize_cluster(c))
@@ -1273,7 +1201,11 @@ def api_cluster_preferred_hour(public_id):
 
 @app.route("/api/app/clusters/<public_id>/timezone", methods=["PUT"])
 def api_cluster_timezone(public_id):
-    """Set the timezone for a cluster (for UI display purposes)."""
+    """
+    Set the timezone for a cluster. Now load-bearing (not cosmetic) - used
+    by the dashboard's local<->UTC hour conversion and by the backend's
+    _local_date / _already_watered_today same-day dedup check.
+    """
     if not _require_dashboard_auth():
         return jsonify({"error": "Unauthorized"}), 401
     c = Cluster.query.filter_by(public_id=public_id).first()
@@ -1282,11 +1214,17 @@ def api_cluster_timezone(public_id):
 
     payload = request.get_json() or {}
     tz = payload.get("timezone", "UTC").strip()
-    
-    # Basic validation - just check length
+
     if len(tz) > 64:
         return jsonify({"error": "timezone name too long"}), 400
-    
+
+    # Validate it's a real IANA zone name - reject garbage at write time
+    # rather than silently falling back to UTC later during scheduling.
+    try:
+        ZoneInfo(tz or "UTC")
+    except Exception:
+        return jsonify({"error": "invalid timezone name"}), 400
+
     c.timezone = tz or "UTC"
     db.session.commit()
     return jsonify(_serialize_cluster(c))
@@ -1303,10 +1241,10 @@ def api_cluster_rename(public_id):
 
     payload = request.get_json() or {}
     name = payload.get("name", "").strip()
-    
+
     if not name:
         return jsonify({"error": "name cannot be empty"}), 400
-    
+
     c.name = name
     db.session.commit()
     return jsonify(_serialize_cluster(c))
@@ -1323,11 +1261,12 @@ def api_cluster_initialize_schedule(public_id):
     if not c.is_calibrated:
         return jsonify({"error": "cluster not calibrated"}), 400
 
-    # Calculate next_watering_at from last_watering_at or now
+    # _calculate_next_watering_time's overdue guard (CHANGE 2) ensures this
+    # can't land in the past even if last_watering_at is stale.
     base_time = c.last_watering_at if c.last_watering_at else _utc_now()
     c.next_watering_at = _calculate_next_watering_time(c, base_time)
     db.session.commit()
-    
+
     return jsonify({
         "ok": True,
         "next_watering_at": c.next_watering_at.isoformat(),
@@ -1355,24 +1294,19 @@ def api_clusters_export():
     """Export all cluster data as JSON for backup."""
     if not _require_dashboard_auth():
         return jsonify({"error": "Unauthorized"}), 401
-    
+
     clusters = Cluster.query.all()
     export_data = []
-    
     for c in clusters:
         logs = WateringLog.query.filter_by(cluster_ref=c.id).order_by(WateringLog.created_at.desc()).limit(100).all()
         export_data.append({
             "cluster": _serialize_cluster(c),
             "watering_logs": [
-                {"ml": log.ml, "created_at": log.created_at.isoformat()} 
-                for log in logs
+                {"ml": log.ml, "created_at": log.created_at.isoformat()} for log in logs
             ]
         })
-    
-    return jsonify({
-        "exported_at": _utc_now().isoformat(),
-        "clusters": export_data
-    })
+
+    return jsonify({"exported_at": _utc_now().isoformat(), "clusters": export_data})
 
 
 @app.route("/api/app/clusters/import", methods=["POST"])
@@ -1380,20 +1314,17 @@ def api_clusters_import():
     """Import cluster data from JSON backup."""
     if not _require_dashboard_auth():
         return jsonify({"error": "Unauthorized"}), 401
-    
+
     payload = request.get_json() or {}
     clusters_data = payload.get("clusters", [])
-    
+
     imported = 0
     for item in clusters_data:
         cluster_data = item.get("cluster", {})
-        
-        # Check if cluster already exists by public_id
         existing = Cluster.query.filter_by(public_id=cluster_data.get("public_id")).first()
         if existing:
             continue
-        
-        # Create new cluster
+
         c = Cluster(
             public_id=cluster_data.get("public_id"),
             name=cluster_data.get("name", "Imported Cluster"),
@@ -1408,16 +1339,15 @@ def api_clusters_import():
         )
         db.session.add(c)
         db.session.flush()
-        
-        # Add catalog plants
+
         plant_ids = [p["id"] for p in cluster_data.get("catalog_plants", [])]
         if plant_ids:
             plants = CatalogPlant.query.filter(CatalogPlant.id.in_(plant_ids)).all()
             for p in plants:
                 c.catalog_plants.append(p)
-        
+
         imported += 1
-    
+
     db.session.commit()
     return jsonify({"ok": True, "imported_count": imported})
 
@@ -1429,7 +1359,6 @@ def update_settings():
 
     payload = request.get_json() or {}
     plant_id = payload.get("plant_id")
-
     if not plant_id:
         return jsonify({"error": "plant_id required"}), 400
 

@@ -137,12 +137,19 @@
   opacity: 0.7;
 }
 
-/* Wall click areas for door/window placement */
+/* Wall click areas for door/window placement.
+   Pointer-events are OFF by default so they never block room selection
+   or the resize handles — they only turn on while a wall tool is active. */
 .wall-click-area {
   position: absolute;
   background: transparent;
-  cursor: crosshair;
+  pointer-events: none;
   z-index: 1;
+}
+
+.wall-click-area.active-cursor {
+  pointer-events: all;
+  cursor: crosshair;
 }
 
 .wall-click-area.top {
@@ -186,6 +193,12 @@
 
 .door-opening:hover {
   background: #A0522D;
+}
+
+.door-opening.dragging,
+.window-opening.dragging {
+  z-index: 3;
+  filter: brightness(1.15);
 }
 
 .door-opening.top {

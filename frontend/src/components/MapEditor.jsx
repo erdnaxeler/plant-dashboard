@@ -46,6 +46,84 @@ export default function MapEditor() {
     loadMapData();
   }, []);
 
+  // --- Room snapping -------------------------------------------------
+  // While dragging a room, if one of its edges comes within SNAP_THRESHOLD
+  // of another room's edge (and they overlap along the perpendicular axis,
+  // so they'd actually share a wall rather than just be diagonally close),
+  // snap that edge flush against the other room's edge. Visual-only: each
+  // room stays its own independent rectangle, they just end up touching
+  // with no gap instead of overlapping or leaving a sliver of space.
+  const SNAP_THRESHOLD = 12; // px, in flow coordinates
+
+  const getRoomSnapPosition = useCallback((draggedNode, proposedX, proposedY) => {
+    const width = draggedNode.style?.width || draggedNode.width || 400;
+    const height = draggedNode.style?.height || draggedNode.height || 300;
+
+    const otherRooms = nodes.filter(
+      (n) => n.type === 'room' && n.id !== draggedNode.id
+    );
+
+    let snappedX = proposedX;
+    let snappedY = proposedY;
+    let snappedHorizontally = false;
+    let snappedVertically = false;
+
+    const dLeft = proposedX;
+    const dRight = proposedX + width;
+    const dTop = proposedY;
+    const dBottom = proposedY + height;
+
+    for (const room of otherRooms) {
+      const rWidth = room.style?.width || room.width || 400;
+      const rHeight = room.style?.height || room.height || 300;
+      const rLeft = room.position.x;
+      const rRight = room.position.x + rWidth;
+      const rTop = room.position.y;
+      const rBottom = room.position.y + rHeight;
+
+      // Vertical overlap check (needed for left/right wall snapping —
+      // the rooms must overlap in Y for a shared vertical wall to make sense)
+      const verticalOverlap = dTop < rBottom && dBottom > rTop;
+      // Horizontal overlap check (needed for top/bottom wall snapping)
+      const horizontalOverlap = dLeft < rRight && dRight > rLeft;
+
+      if (!snappedHorizontally && verticalOverlap) {
+        if (Math.abs(dRight - rLeft) < SNAP_THRESHOLD) {
+          snappedX = rLeft - width; // dragged room's right edge -> room's left edge
+          snappedHorizontally = true;
+        } else if (Math.abs(dLeft - rRight) < SNAP_THRESHOLD) {
+          snappedX = rRight; // dragged room's left edge -> room's right edge
+          snappedHorizontally = true;
+        }
+      }
+
+      if (!snappedVertically && horizontalOverlap) {
+        if (Math.abs(dBottom - rTop) < SNAP_THRESHOLD) {
+          snappedY = rTop - height; // dragged room's bottom edge -> room's top edge
+          snappedVertically = true;
+        } else if (Math.abs(dTop - rBottom) < SNAP_THRESHOLD) {
+          snappedY = rBottom; // dragged room's top edge -> room's bottom edge
+          snappedVertically = true;
+        }
+      }
+    }
+
+    return { x: snappedX, y: snappedY };
+  }, [nodes]);
+
+  // Fires continuously during a room drag — apply snapping live so the
+  // room visibly "catches" against a neighbor before you release the mouse.
+  const onNodeDrag = useCallback((event, node) => {
+    if (node.type !== 'room') return;
+
+    const snapped = getRoomSnapPosition(node, node.position.x, node.position.y);
+    if (snapped.x !== node.position.x || snapped.y !== node.position.y) {
+      setNodes((nds) => nds.map((n) =>
+        n.id === node.id ? { ...n, position: snapped } : n
+      ));
+    }
+  }, [getRoomSnapPosition, setNodes]);
+
   const loadMapData = async () => {
     try {
       const [mapObjects, connections, clustersData] = await Promise.all([
@@ -194,6 +272,25 @@ export default function MapEditor() {
     } catch (error) {
       console.error('Failed to update position:', error);
       showToast('Failed to update position', true);
+    }
+  }, []);
+
+  // Fired instead of onNodeDragStop when a multi-node selection (made via
+  // Shift+drag box-select) is dragged together — persist every node's
+  // final position in parallel.
+  const onSelectionDragStop = useCallback(async (event, draggedNodes) => {
+    try {
+      await Promise.all(
+        draggedNodes.map((node) =>
+          MapObjectsAPI.update(node.data.objectId, {
+            x: node.position.x,
+            y: node.position.y,
+          })
+        )
+      );
+    } catch (error) {
+      console.error('Failed to update positions:', error);
+      showToast('Failed to save positions', true);
     }
   }, []);
 
@@ -484,6 +581,31 @@ export default function MapEditor() {
     setSelectedOpening({ nodeId, type, id: openingId });
   }, []);
 
+  // Persist a door/window's new offset after dragging it along its wall
+  const handleOpeningMove = useCallback((nodeId, type, openingId, newOffset) => {
+    setNodes((nds) => nds.map((node) => {
+      if (node.id === nodeId && node.type === 'room') {
+        const openingKey = type === 'door' ? 'doors' : 'windows';
+        const openings = node.data[openingKey] || [];
+        const updatedOpenings = openings.map((o) =>
+          o.id === openingId ? { ...o, offset: newOffset } : o
+        );
+
+        const updatedNode = {
+          ...node,
+          data: {
+            ...node.data,
+            [openingKey]: updatedOpenings,
+          },
+        };
+
+        saveRoomMetadata(node.data.objectId, updatedNode.data, node.style);
+        return updatedNode;
+      }
+      return node;
+    }));
+  }, [setNodes]);
+
   // Delete selected opening
   const handleDeleteOpening = useCallback(() => {
     if (!selectedOpening) return;
@@ -586,6 +708,9 @@ export default function MapEditor() {
           onOpeningClick: isApartmentMode
             ? (type, id) => handleOpeningClick(node.id, type, id)
             : undefined,
+          onOpeningMove: isApartmentMode
+            ? (type, id, newOffset) => handleOpeningMove(node.id, type, id, newOffset)
+            : undefined,
           onResize: isApartmentMode
             ? (width, height) => handleRoomResize(node.id, width, height)
             : undefined,
@@ -632,7 +757,9 @@ export default function MapEditor() {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={isApartmentMode ? undefined : onConnect}
+          onNodeDrag={isApartmentMode ? onNodeDrag : undefined}
           onNodeDragStop={onNodeDragStop}
+          onSelectionDragStop={onSelectionDragStop}
           onNodesDelete={isApartmentMode ? undefined : onNodesDelete}
           onEdgesDelete={isApartmentMode ? undefined : onEdgesDelete}
           onSelectionChange={onSelectionChange}

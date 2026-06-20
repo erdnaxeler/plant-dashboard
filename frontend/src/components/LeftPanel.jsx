@@ -40,17 +40,19 @@ export default function LeftPanel({ onAddNode, cursorMode, onCursorModeToggle, a
             </>
           )}
 
-          <div
-            className="tool-item room-tool"
-            draggable
-            onDragStart={(e) => onDragStart(e, 'room')}
-            onClick={() => onAddNode('room')}
-          >
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="4" y="4" width="16" height="16" rx="1" />
-            </svg>
-            <span>Room</span>
-          </div>
+          {apartmentMode && (
+            <div
+              className="tool-item room-tool"
+              draggable
+              onDragStart={(e) => onDragStart(e, 'room')}
+              onClick={() => onAddNode('room')}
+            >
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="4" y="4" width="16" height="16" rx="1" />
+              </svg>
+              <span>Room</span>
+            </div>
+          )}
         </div>
         <div className="panel-hint">
           Drag onto canvas or click to add

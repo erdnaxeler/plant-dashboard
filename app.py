@@ -450,40 +450,70 @@ def _calculate_next_watering_time(cluster: Cluster, from_time: datetime, skip_in
     """
     Calculate the next watering time from a given starting point.
 
-    CHANGE 2 (overdue guard): if from_time is already at least one full
-    interval in the past relative to now, the cluster is overdue - return
-    `now` directly instead of computing a candidate that would still land
-    in the past. Only applies to the auto-watering path (skip_interval=False).
+    Two-stage approach: first decide WHICH DAY to water, then decide WHAT
+    TIME on that day.
+
+    STAGE 1 (day): if `from_time` (last watering) falls on the same LOCAL
+    calendar day as `now` (per cluster.timezone), the cluster has already
+    watered today -> the next watering day is from_time's day + one
+    interval-worth of days. Otherwise (from_time was a previous day, or
+    there's no prior watering), today is a valid watering day.
+
+    STAGE 2 (time): once the day is fixed, place
+    preferred_watering_hour_utc on that day. If that computed instant is
+    already at/before `now` (e.g. today's slot already passed), roll
+    forward one day - this naturally handles the "overdue" case without
+    needing a separate interval-floor check.
+
+    This replaces the old approach of adding a flat one-interval floor
+    before snapping to the preferred hour, which had a real bug: a manual
+    watering just 30 minutes after the usual time would push the floor
+    past that day's preferred-hour slot, costing a full extra day instead
+    of the 30 minutes actually lost.
     """
     interval = _interval_for_group(cluster.watering_group)
-
-    # Defensively normalize from_time - callers usually pass an already-UTC
-    # value, but DB-sourced datetimes can come back naive depending on the
-    # backend (e.g. SQLite silently drops tzinfo even on a
-    # DateTime(timezone=True) column; Postgres does not). Same convention
-    # as every other DB-sourced datetime in this file.
     from_time = _as_utc(from_time) or _utc_now()
-
     now = _utc_now()
-    if not skip_interval and (now - from_time) >= interval:
-        return now
-
-    if cluster.preferred_watering_hour_utc is None:
-        return from_time + interval
-
-    pref_hour = cluster.preferred_watering_hour_utc
 
     if skip_interval:
-        candidate = from_time.replace(hour=pref_hour, minute=0, second=0, microsecond=0)
+        # Manual watering: from_time is "now" by construction. Just find
+        # the next occurrence of the preferred hour after from_time.
+        if cluster.preferred_watering_hour_utc is None:
+            return from_time + interval
+        candidate = from_time.replace(hour=cluster.preferred_watering_hour_utc, minute=0, second=0, microsecond=0)
         if candidate <= from_time:
             candidate += timedelta(days=1)
         return candidate
+
+    if cluster.preferred_watering_hour_utc is None:
+        # No preferred hour set: simple interval from last watering. The
+        # day-based logic below doesn't apply without a fixed hour to pin to.
+        return from_time + interval
+
+    # STAGE 1: which local day should the next watering land on?
+    watered_today = _local_date(cluster, from_time) == _local_date(cluster, now)
+    if watered_today:
+        days_to_add = max(1, round(interval.total_seconds() / 86400))
+        next_day = _local_date(cluster, from_time) + timedelta(days=days_to_add)
     else:
-        earliest_allowed = from_time + interval
-        candidate = earliest_allowed.replace(hour=pref_hour, minute=0, second=0, microsecond=0)
-        while candidate < earliest_allowed:
-            candidate += timedelta(days=1)
-        return candidate
+        next_day = _local_date(cluster, now)
+
+    # STAGE 2: place preferred_watering_hour_utc on that local day. Anchor
+    # via local midnight on next_day (DST-safe), then set the UTC hour.
+    tz = _cluster_zoneinfo(cluster)
+    local_midnight = datetime(next_day.year, next_day.month, next_day.day, 0, 0, 0, tzinfo=tz)
+    local_midnight_utc = local_midnight.astimezone(timezone.utc)
+    candidate = local_midnight_utc.replace(
+        hour=cluster.preferred_watering_hour_utc, minute=0, second=0, microsecond=0
+    )
+
+    # If that slot is already at/before now (e.g. today's slot already
+    # passed, or the cluster is overdue from being paused), roll forward
+    # one day. This subsumes the old separate "overdue" guard.
+    if candidate <= now:
+        candidate += timedelta(days=1)
+
+    return candidate
 
 
 def _is_watering_time_now(cluster: Cluster, now: datetime) -> bool:
@@ -644,8 +674,8 @@ def _serialize_cluster(c: Cluster) -> dict[str, Any]:
     ]
 
     # AUTO-INITIALIZE next_watering_at if null and calibrated. Uses
-    # _calculate_next_watering_time, which includes the overdue guard
-    # (CHANGE 2), so this can't produce a past timestamp.
+    # _calculate_next_watering_time, which always rolls forward to a
+    # future slot, so this can't produce a past timestamp.
     if c.is_calibrated and c.next_watering_at is None and c.watering_group:
         base_time = c.last_watering_at if c.last_watering_at else _utc_now()
         c.next_watering_at = _calculate_next_watering_time(c, base_time)
@@ -1012,8 +1042,9 @@ def api_cluster_start_watering(public_id):
 
     c.watering_armed = True
 
-    # _calculate_next_watering_time includes the overdue guard (CHANGE 2),
-    # so even if last_watering_at is stale, this can't land in the past.
+    # _calculate_next_watering_time always rolls forward to a future slot,
+    # so even if last_watering_at is stale (cluster paused a long time),
+    # this can't land in the past.
     if c.next_watering_at is None:
         if c.last_watering_at:
             c.next_watering_at = _calculate_next_watering_time(c, c.last_watering_at)
@@ -1261,8 +1292,8 @@ def api_cluster_initialize_schedule(public_id):
     if not c.is_calibrated:
         return jsonify({"error": "cluster not calibrated"}), 400
 
-    # _calculate_next_watering_time's overdue guard (CHANGE 2) ensures this
-    # can't land in the past even if last_watering_at is stale.
+    # _calculate_next_watering_time always rolls forward to a future slot,
+    # so this can't land in the past even if last_watering_at is stale.
     base_time = c.last_watering_at if c.last_watering_at else _utc_now()
     c.next_watering_at = _calculate_next_watering_time(c, base_time)
     db.session.commit()

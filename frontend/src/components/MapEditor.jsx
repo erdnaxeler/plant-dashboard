@@ -12,7 +12,7 @@ import 'reactflow/dist/style.css';
 
 import PlantNode from './nodes/PlantNode';
 import WatererNode from './nodes/WatererNode';
-import RoomLayer from './RoomLayer';
+import RoomNode from './nodes/RoomNode';
 import Toolbar from './Toolbar';
 import LeftPanel from './LeftPanel';
 import PropertiesPanel from './PropertiesPanel';
@@ -22,6 +22,7 @@ import './MapEditor.css';
 const nodeTypes = {
   plant: PlantNode,
   waterer: WatererNode,
+  room: RoomNode,
 };
 
 let nodeIdCounter = 1;
@@ -36,8 +37,10 @@ export default function MapEditor() {
   const [toasts, setToasts] = useState([]);
   const [cursorMode, setCursorMode] = useState(null); // null, 'door', or 'window'
   const [selectedOpening, setSelectedOpening] = useState(null); // {nodeId, type, id}
-  const [rooms, setRooms] = useState([]); // Rooms as background layer
-  const [roomsLocked, setRoomsLocked] = useState(false); // Lock/unlock rooms
+  // mode: 'apartment' -> rooms are live/editable, plant+waterer nodes hidden
+  //       'plants'    -> rooms are inert background, plant+waterer nodes live
+  const [mode, setMode] = useState('plants');
+  const isApartmentMode = mode === 'apartment';
 
   useEffect(() => {
     loadMapData();
@@ -51,60 +54,56 @@ export default function MapEditor() {
         ClustersAPI.getAll(),
       ]);
 
-      // Separate rooms and regular nodes
-      const roomObjects = [];
-      const nodeObjects = [];
-      
-      mapObjects.forEach(obj => {
+      // Convert all objects (rooms, plants, waterers) into one unified
+      // React Flow nodes array. Rooms carry their door/window/size data
+      // in `data`; mode-driven interactivity (locked/draggable/etc.) is
+      // applied separately in the `nodes` effect below, not here, so we
+      // don't have to re-fetch on every mode switch.
+      const flowNodes = mapObjects.map(obj => {
         if (obj.type === 'room') {
-          roomObjects.push(obj);
-        } else {
-          nodeObjects.push(obj);
-        }
-      });
+          let doors = [];
+          let windows = [];
+          let width = 400;
+          let height = 300;
 
-      // Convert room objects to room layer format
-      const roomsData = roomObjects.map(obj => {
-        let doors = [];
-        let windows = [];
-        let width = 400;
-        let height = 300;
-        
-        if (obj.metadata) {
-          try {
-            const metadata = typeof obj.metadata === 'string' ? JSON.parse(obj.metadata) : obj.metadata;
-            doors = metadata.doors || [];
-            windows = metadata.windows || [];
-            width = metadata.width || 400;
-            height = metadata.height || 300;
-          } catch (e) {
-            // Use defaults
+          if (obj.metadata) {
+            try {
+              const metadata = typeof obj.metadata === 'string' ? JSON.parse(obj.metadata) : obj.metadata;
+              doors = metadata.doors || [];
+              windows = metadata.windows || [];
+              width = metadata.width || 400;
+              height = metadata.height || 300;
+            } catch (e) {
+              // Use defaults
+            }
           }
+
+          return {
+            id: `node-${obj.id}`,
+            type: 'room',
+            position: { x: obj.map_x || 0, y: obj.map_y || 0 },
+            style: { width, height },
+            zIndex: -1, // always render beneath plant/waterer nodes
+            data: {
+              label: obj.name,
+              objectId: obj.id,
+              doors,
+              windows,
+            },
+          };
         }
-        
+
         return {
-          id: obj.id,
-          name: obj.name,
-          x: obj.map_x || 0,
-          y: obj.map_y || 0,
-          width,
-          height,
-          doors,
-          windows,
+          id: `node-${obj.id}`,
+          type: obj.type,
+          position: { x: obj.map_x || 0, y: obj.map_y || 0 },
+          data: {
+            label: obj.name,
+            objectId: obj.id,
+            clusterId: obj.cluster_id,
+          },
         };
       });
-
-      // Convert plant/waterer objects to React Flow nodes
-      const flowNodes = nodeObjects.map(obj => ({
-        id: `node-${obj.id}`,
-        type: obj.type,
-        position: { x: obj.map_x || 0, y: obj.map_y || 0 },
-        data: { 
-          label: obj.name,
-          objectId: obj.id,
-          clusterId: obj.cluster_id,
-        },
-      }));
 
       // Convert Connections to React Flow edges
       const flowEdges = connections.map(conn => ({
@@ -123,7 +122,6 @@ export default function MapEditor() {
 
       setNodes(flowNodes);
       setEdges(flowEdges);
-      setRooms(roomsData);
       setClusters(clustersData);
 
       // Update node ID counter
@@ -260,33 +258,31 @@ export default function MapEditor() {
       const name = `${typeNames[type] || 'Object'} ${nodeIdCounter}`;
       const mapObject = await MapObjectsAPI.create(type, name, position.x, position.y);
 
-      if (type === 'room') {
-        // Add to rooms layer
-        const newRoom = {
-          id: mapObject.id,
-          name: mapObject.name,
-          x: mapObject.map_x,
-          y: mapObject.map_y,
-          width: 400,
-          height: 300,
-          doors: [],
-          windows: [],
-        };
-        setRooms((prevRooms) => [...prevRooms, newRoom]);
-      } else {
-        // Add to ReactFlow nodes
-        const newNode = {
-          id: `node-${mapObject.id}`,
-          type: type,
-          position: { x: mapObject.map_x, y: mapObject.map_y },
-          data: { 
-            label: mapObject.name,
-            objectId: mapObject.id,
-            clusterId: mapObject.cluster_id,
-          },
-        };
-        setNodes((nds) => nds.concat(newNode));
-      }
+      const newNode = type === 'room'
+        ? {
+            id: `node-${mapObject.id}`,
+            type: 'room',
+            position: { x: mapObject.map_x, y: mapObject.map_y },
+            style: { width: 400, height: 300 },
+            zIndex: -1,
+            data: {
+              label: mapObject.name,
+              objectId: mapObject.id,
+              doors: [],
+              windows: [],
+            },
+          }
+        : {
+            id: `node-${mapObject.id}`,
+            type: type,
+            position: { x: mapObject.map_x, y: mapObject.map_y },
+            data: {
+              label: mapObject.name,
+              objectId: mapObject.id,
+              clusterId: mapObject.cluster_id,
+            },
+          };
+      setNodes((nds) => nds.concat(newNode));
 
       nodeIdCounter++;
       showToast(`${typeNames[type] || 'Object'} added`);
@@ -327,16 +323,30 @@ export default function MapEditor() {
         const name = `${typeNames[type] || 'Object'} ${nodeIdCounter}`;
         const mapObject = await MapObjectsAPI.create(type, name, position.x, position.y);
 
-        const newNode = {
-          id: `node-${mapObject.id}`,
-          type: type,
-          position: { x: mapObject.map_x, y: mapObject.map_y },
-          data: { 
-            label: mapObject.name,
-            objectId: mapObject.id,
-            clusterId: mapObject.cluster_id,
-          },
-        };
+        const newNode = type === 'room'
+          ? {
+              id: `node-${mapObject.id}`,
+              type: 'room',
+              position: { x: mapObject.map_x, y: mapObject.map_y },
+              style: { width: 400, height: 300 },
+              zIndex: -1,
+              data: {
+                label: mapObject.name,
+                objectId: mapObject.id,
+                doors: [],
+                windows: [],
+              },
+            }
+          : {
+              id: `node-${mapObject.id}`,
+              type: type,
+              position: { x: mapObject.map_x, y: mapObject.map_y },
+              data: {
+                label: mapObject.name,
+                objectId: mapObject.id,
+                clusterId: mapObject.cluster_id,
+              },
+            };
 
         setNodes((nds) => nds.concat(newNode));
         nodeIdCounter++;
@@ -459,7 +469,7 @@ export default function MapEditor() {
         };
         
         // Save to backend
-        saveRoomMetadata(node.data.objectId, updatedNode.data);
+        saveRoomMetadata(node.data.objectId, updatedNode.data, node.style);
         
         return updatedNode;
       }
@@ -493,7 +503,7 @@ export default function MapEditor() {
         };
         
         // Save to backend
-        saveRoomMetadata(node.data.objectId, updatedNode.data);
+        saveRoomMetadata(node.data.objectId, updatedNode.data, node.style);
         
         return updatedNode;
       }
@@ -505,11 +515,13 @@ export default function MapEditor() {
   }, [selectedOpening, setNodes]);
 
   // Save room metadata to backend
-  const saveRoomMetadata = async (objectId, data) => {
+  const saveRoomMetadata = async (objectId, data, style) => {
     try {
       const metadata = {
         doors: data.doors || [],
         windows: data.windows || [],
+        width: style?.width,
+        height: style?.height,
       };
       await MapObjectsAPI.update(objectId, { metadata: JSON.stringify(metadata) });
     } catch (error) {
@@ -529,11 +541,64 @@ export default function MapEditor() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedOpening, handleDeleteOpening]);
 
-  // Lock/unlock rooms toggle
-  const handleToggleRoomsLock = useCallback(() => {
-    setRoomsLocked(prev => !prev);
-    showToast(roomsLocked ? 'Rooms unlocked' : 'Rooms locked');
-  }, [roomsLocked]);
+  // Switch between apartment-editing mode and plants mode
+  const handleSetMode = useCallback((newMode) => {
+    setMode(newMode);
+    if (newMode === 'plants') {
+      // Leaving apartment editing: drop any half-finished wall-tool state
+      setCursorMode(null);
+      setSelectedOpening(null);
+    }
+    showToast(newMode === 'apartment' ? 'Editing apartment layout' : 'Apartment locked');
+  }, []);
+
+  // Persist a room resize (called from RoomNode's NodeResizer onResizeEnd)
+  const handleRoomResize = useCallback((nodeId, width, height) => {
+    setNodes((nds) => nds.map((node) => {
+      if (node.id === nodeId && node.type === 'room') {
+        const updatedNode = {
+          ...node,
+          style: { ...node.style, width, height },
+        };
+        saveRoomMetadata(node.data.objectId, node.data, updatedNode.style);
+        return updatedNode;
+      }
+      return node;
+    }));
+  }, [setNodes]);
+
+  // Inject mode-aware callbacks/flags into each node's data right before
+  // render. This is the one place that decides what's interactive —
+  // RoomNode and the plant/waterer nodes themselves stay dumb.
+  const displayNodes = nodes.map((node) => {
+    if (node.type === 'room') {
+      return {
+        ...node,
+        draggable: isApartmentMode,
+        selectable: isApartmentMode,
+        data: {
+          ...node.data,
+          locked: !isApartmentMode,
+          cursorMode: isApartmentMode ? cursorMode : null,
+          onWallClick: isApartmentMode
+            ? (wall, offset) => handleWallClick(node.id, wall, offset)
+            : undefined,
+          onOpeningClick: isApartmentMode
+            ? (type, id) => handleOpeningClick(node.id, type, id)
+            : undefined,
+          onResize: isApartmentMode
+            ? (width, height) => handleRoomResize(node.id, width, height)
+            : undefined,
+        },
+      };
+    }
+    // Plant/waterer nodes: hidden entirely while editing the apartment,
+    // so the apartment tab really does show "only apartment stuff".
+    return {
+      ...node,
+      hidden: isApartmentMode,
+    };
+  });
 
   return (
     <div className="map-editor">
@@ -541,38 +606,41 @@ export default function MapEditor() {
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
         onFitView={handleFitView}
-        roomsLocked={roomsLocked}
-        onToggleRoomsLock={handleToggleRoomsLock}
+        mode={mode}
+        onSetMode={handleSetMode}
       />
       <LeftPanel 
         onAddNode={handleAddNode}
         cursorMode={cursorMode}
         onCursorModeToggle={handleCursorModeToggle}
+        apartmentMode={isApartmentMode}
       />
-      <PropertiesPanel 
-        selectedNode={selectedNode}
-        connectedPlants={getConnectedPlants()}
-        onDelete={handleDeleteNode}
-        cluster={getNodeCluster()}
-        onClusterUpdate={handleClusterUpdate}
-      />
+      {!isApartmentMode && (
+        <PropertiesPanel 
+          selectedNode={selectedNode}
+          connectedPlants={getConnectedPlants()}
+          onDelete={handleDeleteNode}
+          cluster={getNodeCluster()}
+          onClusterUpdate={handleClusterUpdate}
+        />
+      )}
       
       <div className="canvas-container" ref={reactFlowWrapper}>
-        <RoomLayer rooms={rooms} isLocked={roomsLocked} />
         <ReactFlow
-          nodes={nodes}
-          edges={edges}
+          nodes={displayNodes}
+          edges={isApartmentMode ? [] : edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
+          onConnect={isApartmentMode ? undefined : onConnect}
           onNodeDragStop={onNodeDragStop}
-          onNodesDelete={onNodesDelete}
-          onEdgesDelete={onEdgesDelete}
+          onNodesDelete={isApartmentMode ? undefined : onNodesDelete}
+          onEdgesDelete={isApartmentMode ? undefined : onEdgesDelete}
           onSelectionChange={onSelectionChange}
           onInit={setReactFlowInstance}
           onDrop={onDrop}
           onDragOver={onDragOver}
           nodeTypes={nodeTypes}
+          nodesConnectable={!isApartmentMode}
           fitView
           defaultEdgeOptions={{
             type: 'smoothstep',
@@ -583,11 +651,15 @@ export default function MapEditor() {
           }}
         >
           <Controls />
-          <MiniMap 
-            nodeColor={(node) => {
-              return node.type === 'plant' ? '#4ec9b0' : '#569cd6';
-            }}
-          />
+          {!isApartmentMode && (
+            <MiniMap 
+              nodeColor={(node) => {
+                if (node.type === 'plant') return '#4ec9b0';
+                if (node.type === 'waterer') return '#569cd6';
+                return '#444';
+              }}
+            />
+          )}
           <Background variant="dots" gap={20} size={1} />
         </ReactFlow>
       </div>

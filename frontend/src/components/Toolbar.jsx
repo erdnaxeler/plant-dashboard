@@ -1,7 +1,7 @@
 import React from 'react';
 import './Toolbar.css';
 
-export default function Toolbar({ onZoomIn, onZoomOut, onFitView, roomsLocked, onToggleRoomsLock }) {
+export default function Toolbar({ onZoomIn, onZoomOut, onFitView, mode, onSetMode }) {
   return (
     <div className="toolbar">
       <div className="toolbar-left">
@@ -11,24 +11,24 @@ export default function Toolbar({ onZoomIn, onZoomOut, onFitView, roomsLocked, o
           </svg>
           <span>Map Editor</span>
         </div>
+
+        <div className="mode-switch">
+          <button
+            className={`mode-switch-btn ${mode === 'plants' ? 'active' : ''}`}
+            onClick={() => onSetMode('plants')}
+          >
+            Plants
+          </button>
+          <button
+            className={`mode-switch-btn ${mode === 'apartment' ? 'active' : ''}`}
+            onClick={() => onSetMode('apartment')}
+          >
+            Apartment
+          </button>
+        </div>
       </div>
       
       <div className="toolbar-right">
-        <button 
-          className={`toolbar-btn ${roomsLocked ? 'active' : ''}`}
-          onClick={onToggleRoomsLock} 
-          title={roomsLocked ? "Unlock Rooms" : "Lock Rooms"}
-        >
-          {roomsLocked ? (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12,17A2,2 0 0,0 14,15C14,13.89 13.1,13 12,13A2,2 0 0,0 10,15A2,2 0 0,0 12,17M18,8A2,2 0 0,1 20,10V20A2,2 0 0,1 18,22H6A2,2 0 0,1 4,20V10C4,8.89 4.9,8 6,8H7V6A5,5 0 0,1 12,1A5,5 0 0,1 17,6V8H18M12,3A3,3 0 0,0 9,6V8H15V6A3,3 0 0,0 12,3Z" />
-            </svg>
-          ) : (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M18,8A2,2 0 0,1 20,10V20A2,2 0 0,1 18,22H6C4.89,22 4,21.1 4,20V10A2,2 0 0,1 6,8H15V6A3,3 0 0,0 12,3A3,3 0 0,0 9,6H7A5,5 0 0,1 12,1A5,5 0 0,1 17,6V8H18M12,17A2,2 0 0,0 14,15A2,2 0 0,0 12,13A2,2 0 0,0 10,15A2,2 0 0,0 12,17Z" />
-            </svg>
-          )}
-        </button>
         <button className="toolbar-btn" onClick={onZoomOut} title="Zoom Out">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
             <path d="M19,13H5V11H19V13Z" />

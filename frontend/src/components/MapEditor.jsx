@@ -57,28 +57,33 @@ export default function MapEditor() {
   // edge. Visual-only: each room stays its own independent rectangle,
   // they just end up touching with no gap instead of overlapping or
   // leaving a sliver of space.
-  const SNAP_THRESHOLD = 12; // px, in flow coordinates
+  const SNAP_THRESHOLD = 16; // px, in flow coordinates — generous on purpose; snapping should be an ambient assist, not something you have to line up precisely to trigger
 
   // Given a candidate box {x, y, width, height} for one room, return a
   // snapped version of just the edges that moved (controlled via which*
-  // flags), snapping each independently against every other room.
-  const snapRoomBox = useCallback((roomId, box, { snapLeft, snapRight, snapTop, snapBottom }) => {
+  // flags), snapping each independently against every other room's
+  // touching edge. allowResize controls whether a snap is permitted to
+  // change width/height (true during resize) or must only move x/y
+  // (false during a plain drag, where size must never change).
+  const snapRoomBoxToTouch = useCallback((roomId, box, { snapLeft, snapRight, snapTop, snapBottom, allowResize }) => {
     const otherRooms = nodes.filter((n) => n.type === 'room' && n.id !== roomId);
 
     let { x, y, width, height } = box;
     let snappedX = false;
-    let snappedRight = false; // right edge snapped via width adjustment
+    let snappedRight = false;
     let snappedY = false;
     let snappedBottom = false;
 
     for (const room of otherRooms) {
-      const rWidth = room.style?.width || room.width || 400;
-      const rHeight = room.style?.height || room.height || 300;
+      const rWidth = room.width || room.style?.width || 400;
+      const rHeight = room.height || room.style?.height || 300;
       const rLeft = room.position.x;
       const rRight = room.position.x + rWidth;
       const rTop = room.position.y;
       const rBottom = room.position.y + rHeight;
 
+      // Recomputed fresh each iteration so an earlier snap this same pass
+      // (against a different neighbor) is reflected in the overlap checks.
       const dLeft = x;
       const dRight = x + width;
       const dTop = y;
@@ -91,7 +96,7 @@ export default function MapEditor() {
       if (snapLeft && !snappedX && verticalOverlap) {
         if (Math.abs(dLeft - rRight) < SNAP_THRESHOLD) {
           const newX = rRight;
-          width += x - newX; // keep the opposite edge fixed when resizing from the left
+          if (allowResize) width += x - newX; // keep the opposite edge fixed when resizing from the left
           x = newX;
           snappedX = true;
         }
@@ -100,7 +105,7 @@ export default function MapEditor() {
       // Right edge moving (dragging, or resizing from the right handle)
       if (snapRight && !snappedRight && verticalOverlap) {
         if (Math.abs(dRight - rLeft) < SNAP_THRESHOLD) {
-          width = rLeft - x;
+          if (allowResize) width = rLeft - x;
           snappedRight = true;
         }
       }
@@ -109,7 +114,7 @@ export default function MapEditor() {
       if (snapTop && !snappedY && horizontalOverlap) {
         if (Math.abs(dTop - rBottom) < SNAP_THRESHOLD) {
           const newY = rBottom;
-          height += y - newY;
+          if (allowResize) height += y - newY;
           y = newY;
           snappedY = true;
         }
@@ -118,27 +123,70 @@ export default function MapEditor() {
       // Bottom edge moving
       if (snapBottom && !snappedBottom && horizontalOverlap) {
         if (Math.abs(dBottom - rTop) < SNAP_THRESHOLD) {
-          height = rTop - y;
+          if (allowResize) height = rTop - y;
           snappedBottom = true;
         }
+      }
+    }
+
+    return { x, y, width, height, snappedX, snappedY };
+  }, [nodes]);
+
+  // Second pass: alignment snap. While sliding a room past a neighbor
+  // (not necessarily touching it), snap edges into level alignment —
+  // e.g. the room's top edge catches when it lines up with a neighbor's
+  // top edge, even though the rooms aren't adjacent. Only fills in axes
+  // that the touch-snap pass above didn't already resolve, so the two
+  // don't fight each other.
+  const snapRoomBoxToAlign = useCallback((roomId, box, { skipX, skipY }) => {
+    const otherRooms = nodes.filter((n) => n.type === 'room' && n.id !== roomId);
+    let { x, y, width, height } = box;
+
+    if (!skipX) {
+      for (const room of otherRooms) {
+        const rWidth = room.width || room.style?.width || 400;
+        const rLeft = room.position.x;
+        const rRight = rLeft + rWidth;
+        if (Math.abs(x - rLeft) < SNAP_THRESHOLD) { x = rLeft; break; }
+        if (Math.abs((x + width) - rRight) < SNAP_THRESHOLD) { x = rRight - width; break; }
+      }
+    }
+
+    if (!skipY) {
+      for (const room of otherRooms) {
+        const rHeight = room.height || room.style?.height || 300;
+        const rTop = room.position.y;
+        const rBottom = rTop + rHeight;
+        if (Math.abs(y - rTop) < SNAP_THRESHOLD) { y = rTop; break; }
+        if (Math.abs((y + height) - rBottom) < SNAP_THRESHOLD) { y = rBottom - height; break; }
       }
     }
 
     return { x, y, width, height };
   }, [nodes]);
 
-  // Plain-drag convenience wrapper: only the position moves, size is fixed,
-  // so all four edges are "live" and we snap against any of them.
+  // Plain-drag convenience wrapper: only the position moves, size is fixed.
+  // Runs touch-snap first (catches edges flush against a neighbor), then
+  // alignment-snap on whichever axis touch-snap didn't already resolve
+  // (catches edges lining up with a neighbor while sliding past it).
   const getRoomSnapPosition = useCallback((draggedNode, proposedX, proposedY) => {
-    const width = draggedNode.style?.width || draggedNode.width || 400;
-    const height = draggedNode.style?.height || draggedNode.height || 300;
-    const snapped = snapRoomBox(
+    const width = draggedNode.width || draggedNode.style?.width || 400;
+    const height = draggedNode.height || draggedNode.style?.height || 300;
+
+    const touchSnapped = snapRoomBoxToTouch(
       draggedNode.id,
       { x: proposedX, y: proposedY, width, height },
-      { snapLeft: true, snapRight: true, snapTop: true, snapBottom: true }
+      { snapLeft: true, snapRight: true, snapTop: true, snapBottom: true, allowResize: false }
     );
-    return { x: snapped.x, y: snapped.y };
-  }, [snapRoomBox]);
+
+    const aligned = snapRoomBoxToAlign(
+      draggedNode.id,
+      { x: touchSnapped.x, y: touchSnapped.y, width, height },
+      { skipX: touchSnapped.snappedX, skipY: touchSnapped.snappedY }
+    );
+
+    return { x: aligned.x, y: aligned.y };
+  }, [snapRoomBoxToTouch, snapRoomBoxToAlign]);
 
   // Fires continuously during a room drag — apply snapping live so the
   // room visibly "catches" against a neighbor before you release the mouse.
@@ -694,9 +742,8 @@ export default function MapEditor() {
   const handleSetMode = useCallback((newMode) => {
     setMode(newMode);
     if (newMode === 'plants') {
-      // Leaving apartment editing: drop any half-finished wall-tool state
-      setCursorMode(null);
-      setSelectedOpening(null);
+      // Leaving apartment editing: close any open door/window popup
+      setOpeningPopup(null);
     }
     showToast(newMode === 'apartment' ? 'Editing apartment layout' : 'Apartment locked');
   }, []);
@@ -705,7 +752,7 @@ export default function MapEditor() {
   // Snaps the edge(s) that moved against any neighboring room before saving.
   const handleRoomResize = useCallback(async (nodeId, x, y, width, height, direction) => {
     const dir = direction || [0, 0];
-    const snapped = snapRoomBox(
+    const snapped = snapRoomBoxToTouch(
       nodeId,
       { x, y, width, height },
       {
@@ -713,6 +760,7 @@ export default function MapEditor() {
         snapRight: dir[0] === 1,
         snapTop: dir[1] === -1,
         snapBottom: dir[1] === 1,
+        allowResize: true,
       }
     );
 
@@ -738,7 +786,7 @@ export default function MapEditor() {
         console.error('Failed to update room position after resize:', error);
       }
     }
-  }, [snapRoomBox, setNodes, nodes]);
+  }, [snapRoomBoxToTouch, setNodes, nodes]);
 
   // Inject mode-aware callbacks/flags into each node's data right before
   // render. This is the one place that decides what's interactive —

@@ -92,6 +92,23 @@ export default function MapEditor() {
       const verticalOverlap = dTop < rBottom && dBottom > rTop;
       const horizontalOverlap = dLeft < rRight && dRight > rLeft;
 
+      // eslint-disable-next-line no-console
+      console.log('[SNAP-DEBUG]', {
+        dragging: nodes.find((n) => n.id === roomId)?.data?.label,
+        neighbor: room.data?.label,
+        dragBox: { dLeft, dRight, dTop, dBottom, width, height },
+        neighborBox: { rLeft, rRight, rTop, rBottom, rWidth, rHeight },
+        verticalOverlap,
+        horizontalOverlap,
+        distances: {
+          leftToRight: Math.abs(dLeft - rRight),
+          rightToLeft: Math.abs(dRight - rLeft),
+          topToBottom: Math.abs(dTop - rBottom),
+          bottomToTop: Math.abs(dBottom - rTop),
+        },
+        flags: { snapLeft, snapRight, snapTop, snapBottom },
+      });
+
       // Left edge moving (dragging, or resizing from the left handle)
       if (snapLeft && !snappedX && verticalOverlap) {
         if (Math.abs(dLeft - rRight) < SNAP_THRESHOLD) {
@@ -141,6 +158,21 @@ export default function MapEditor() {
   const snapRoomBoxToAlign = useCallback((roomId, box, { skipX, skipY }) => {
     const otherRooms = nodes.filter((n) => n.type === 'room' && n.id !== roomId);
     let { x, y, width, height } = box;
+
+    // eslint-disable-next-line no-console
+    console.log('[ALIGN-DEBUG]', {
+      dragging: nodes.find((n) => n.id === roomId)?.data?.label,
+      box,
+      skipX,
+      skipY,
+      otherRoomBoxes: otherRooms.map((r) => ({
+        label: r.data?.label,
+        x: r.position.x,
+        y: r.position.y,
+        width: r.width || r.style?.width,
+        height: r.height || r.style?.height,
+      })),
+    });
 
     if (!skipX) {
       for (const room of otherRooms) {
@@ -790,6 +822,53 @@ export default function MapEditor() {
 
   // Inject mode-aware callbacks/flags into each node's data right before
   // render. This is the one place that decides what's interactive —
+  // Given one room and the full list of rooms, determine which of its
+  // four edges are currently flush against another room's opposite edge
+  // (within a tight tolerance — tighter than SNAP_THRESHOLD, since this
+  // is "are they touching right now" not "should they snap together").
+  // Used purely for rendering: a touching edge gets no border, so two
+  // adjacent rooms read as one continuous wall instead of a double line.
+  // Recomputed fresh every render from current positions, so the instant
+  // you drag either room even slightly, the condition goes false and
+  // both edges get their borders back — "detaching" needs no explicit
+  // unlink step, it's just the natural result of no longer being flush.
+  const TOUCH_TOLERANCE = 2; // px — much tighter than SNAP_THRESHOLD; this is "touching", not "should snap toward touching"
+
+  const getTouchingEdges = useCallback((room, allRooms) => {
+    const width = room.width || room.style?.width || 400;
+    const height = room.height || room.style?.height || 300;
+    const left = room.position.x;
+    const right = left + width;
+    const top = room.position.y;
+    const bottom = top + height;
+
+    const touching = { top: false, right: false, bottom: false, left: false };
+
+    for (const other of allRooms) {
+      if (other.id === room.id) continue;
+      const oWidth = other.width || other.style?.width || 400;
+      const oHeight = other.height || other.style?.height || 300;
+      const oLeft = other.position.x;
+      const oRight = oLeft + oWidth;
+      const oTop = other.position.y;
+      const oBottom = oTop + oHeight;
+
+      const verticalOverlap = top < oBottom && bottom > oTop;
+      const horizontalOverlap = left < oRight && right > oLeft;
+
+      if (verticalOverlap) {
+        if (Math.abs(left - oRight) < TOUCH_TOLERANCE) touching.left = true;
+        if (Math.abs(right - oLeft) < TOUCH_TOLERANCE) touching.right = true;
+      }
+      if (horizontalOverlap) {
+        if (Math.abs(top - oBottom) < TOUCH_TOLERANCE) touching.top = true;
+        if (Math.abs(bottom - oTop) < TOUCH_TOLERANCE) touching.bottom = true;
+      }
+    }
+
+    return touching;
+  }, []);
+
   // RoomNode and the plant/waterer nodes themselves stay dumb.
   const displayNodes = nodes.map((node) => {
     if (node.type === 'room') {
@@ -800,6 +879,7 @@ export default function MapEditor() {
         data: {
           ...node.data,
           locked: !isApartmentMode,
+          touchingEdges: getTouchingEdges(node, nodes.filter((n) => n.type === 'room')),
           onWallClick: isApartmentMode
             ? (wall, offset, screenX, screenY) => handleWallClick(node.id, wall, offset, screenX, screenY)
             : undefined,

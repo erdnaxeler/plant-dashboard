@@ -119,8 +119,25 @@ export default function RoomNode({ data, selected }) {
       ? dragState.offset
       : opening.offset;
 
+  // Edges currently flush against a neighboring room get their border
+  // zeroed, so two adjacent rooms read as one continuous wall instead of
+  // a double-thick line. This is purely visual and re-evaluated every
+  // render from current positions — drag either room even slightly and
+  // these go back to false on the next render, restoring both borders.
+  const touching = data.touchingEdges || {};
+  const touchBorderStyle = {
+    borderTopWidth: touching.top ? 0 : undefined,
+    borderRightWidth: touching.right ? 0 : undefined,
+    borderBottomWidth: touching.bottom ? 0 : undefined,
+    borderLeftWidth: touching.left ? 0 : undefined,
+  };
+
   return (
-    <div className={`room-node ${selected && !locked ? 'selected' : ''} ${locked ? 'locked' : ''}`} ref={roomRef}>
+    <div
+      className={`room-node ${selected && !locked ? 'selected' : ''} ${locked ? 'locked' : ''}`}
+      ref={roomRef}
+      style={touchBorderStyle}
+    >
       {!locked && (
         <NodeResizer
           minWidth={120}

@@ -68,85 +68,85 @@ export default function MapEditor() {
   const snapRoomBoxToTouch = useCallback((roomId, box, { snapLeft, snapRight, snapTop, snapBottom, allowResize }) => {
     const otherRooms = nodes.filter((n) => n.type === 'room' && n.id !== roomId);
 
-    let { x, y, width, height } = box;
-    let snappedX = false;
-    let snappedRight = false;
-    let snappedY = false;
-    let snappedBottom = false;
+    const { x, y, width, height } = box;
+    const dLeft = x;
+    const dRight = x + width;
+    const dTop = y;
+    const dBottom = y + height;
+
+    // Collect every candidate snap across ALL neighbors first, instead of
+    // applying the first one found — array order must never decide which
+    // neighbor "wins" an axis. We then pick the single closest candidate
+    // per axis (left/right share the X axis, top/bottom share Y), so
+    // whichever neighbor is actually nearest is the one that fires,
+    // regardless of where it sits in the nodes array.
+    let bestLeft = null;   // { newX, dist }
+    let bestRight = null;  // { newRight, dist }
+    let bestTop = null;
+    let bestBottom = null;
 
     for (const room of otherRooms) {
       const rWidth = room.width || room.style?.width || 400;
       const rHeight = room.height || room.style?.height || 300;
       const rLeft = room.position.x;
-      const rRight = room.position.x + rWidth;
+      const rRight = rLeft + rWidth;
       const rTop = room.position.y;
-      const rBottom = room.position.y + rHeight;
-
-      // Recomputed fresh each iteration so an earlier snap this same pass
-      // (against a different neighbor) is reflected in the overlap checks.
-      const dLeft = x;
-      const dRight = x + width;
-      const dTop = y;
-      const dBottom = y + height;
+      const rBottom = rTop + rHeight;
 
       const verticalOverlap = dTop < rBottom && dBottom > rTop;
       const horizontalOverlap = dLeft < rRight && dRight > rLeft;
 
-      // eslint-disable-next-line no-console
-      console.log('[SNAP-DEBUG]', {
-        dragging: nodes.find((n) => n.id === roomId)?.data?.label,
-        neighbor: room.data?.label,
-        dragBox: { dLeft, dRight, dTop, dBottom, width, height },
-        neighborBox: { rLeft, rRight, rTop, rBottom, rWidth, rHeight },
-        verticalOverlap,
-        horizontalOverlap,
-        distances: {
-          leftToRight: Math.abs(dLeft - rRight),
-          rightToLeft: Math.abs(dRight - rLeft),
-          topToBottom: Math.abs(dTop - rBottom),
-          bottomToTop: Math.abs(dBottom - rTop),
-        },
-        flags: { snapLeft, snapRight, snapTop, snapBottom },
-      });
-
-      // Left edge moving (dragging, or resizing from the left handle)
-      if (snapLeft && !snappedX && verticalOverlap) {
-        if (Math.abs(dLeft - rRight) < SNAP_THRESHOLD) {
-          const newX = rRight;
-          if (allowResize) width += x - newX; // keep the opposite edge fixed when resizing from the left
-          x = newX;
-          snappedX = true;
+      if (snapLeft && verticalOverlap) {
+        const dist = Math.abs(dLeft - rRight);
+        if (dist < SNAP_THRESHOLD && (!bestLeft || dist < bestLeft.dist)) {
+          bestLeft = { newX: rRight, dist };
         }
       }
-
-      // Right edge moving (dragging, or resizing from the right handle)
-      if (snapRight && !snappedRight && verticalOverlap) {
-        if (Math.abs(dRight - rLeft) < SNAP_THRESHOLD) {
-          if (allowResize) width = rLeft - x;
-          snappedRight = true;
+      if (snapRight && verticalOverlap) {
+        const dist = Math.abs(dRight - rLeft);
+        if (dist < SNAP_THRESHOLD && (!bestRight || dist < bestRight.dist)) {
+          bestRight = { newRight: rLeft, dist };
         }
       }
-
-      // Top edge moving
-      if (snapTop && !snappedY && horizontalOverlap) {
-        if (Math.abs(dTop - rBottom) < SNAP_THRESHOLD) {
-          const newY = rBottom;
-          if (allowResize) height += y - newY;
-          y = newY;
-          snappedY = true;
+      if (snapTop && horizontalOverlap) {
+        const dist = Math.abs(dTop - rBottom);
+        if (dist < SNAP_THRESHOLD && (!bestTop || dist < bestTop.dist)) {
+          bestTop = { newY: rBottom, dist };
         }
       }
-
-      // Bottom edge moving
-      if (snapBottom && !snappedBottom && horizontalOverlap) {
-        if (Math.abs(dBottom - rTop) < SNAP_THRESHOLD) {
-          if (allowResize) height = rTop - y;
-          snappedBottom = true;
+      if (snapBottom && horizontalOverlap) {
+        const dist = Math.abs(dBottom - rTop);
+        if (dist < SNAP_THRESHOLD && (!bestBottom || dist < bestBottom.dist)) {
+          bestBottom = { newBottom: rTop, dist };
         }
       }
     }
 
-    return { x, y, width, height, snappedX, snappedY };
+    let finalX = x, finalY = y, finalWidth = width, finalHeight = height;
+    let snappedX = false, snappedY = false;
+
+    // X axis: left and right can't both fire (a room can't snap on two
+    // opposite edges to two different neighbors at once without resizing
+    // unrealistically) — prefer whichever is closer.
+    if (bestLeft && (!bestRight || bestLeft.dist <= bestRight.dist)) {
+      if (allowResize) finalWidth += x - bestLeft.newX;
+      finalX = bestLeft.newX;
+      snappedX = true;
+    } else if (bestRight) {
+      if (allowResize) finalWidth = bestRight.newRight - x;
+      snappedX = true;
+    }
+
+    if (bestTop && (!bestBottom || bestTop.dist <= bestBottom.dist)) {
+      if (allowResize) finalHeight += y - bestTop.newY;
+      finalY = bestTop.newY;
+      snappedY = true;
+    } else if (bestBottom) {
+      if (allowResize) finalHeight = bestBottom.newBottom - y;
+      snappedY = true;
+    }
+
+    return { x: finalX, y: finalY, width: finalWidth, height: finalHeight, snappedX, snappedY };
   }, [nodes]);
 
   // Second pass: alignment snap. While sliding a room past a neighbor
@@ -159,39 +159,42 @@ export default function MapEditor() {
     const otherRooms = nodes.filter((n) => n.type === 'room' && n.id !== roomId);
     let { x, y, width, height } = box;
 
-    // eslint-disable-next-line no-console
-    console.log('[ALIGN-DEBUG]', {
-      dragging: nodes.find((n) => n.id === roomId)?.data?.label,
-      box,
-      skipX,
-      skipY,
-      otherRoomBoxes: otherRooms.map((r) => ({
-        label: r.data?.label,
-        x: r.position.x,
-        y: r.position.y,
-        width: r.width || r.style?.width,
-        height: r.height || r.style?.height,
-      })),
-    });
-
     if (!skipX) {
+      let bestX = null; // { value, dist }
       for (const room of otherRooms) {
         const rWidth = room.width || room.style?.width || 400;
         const rLeft = room.position.x;
         const rRight = rLeft + rWidth;
-        if (Math.abs(x - rLeft) < SNAP_THRESHOLD) { x = rLeft; break; }
-        if (Math.abs((x + width) - rRight) < SNAP_THRESHOLD) { x = rRight - width; break; }
+
+        const leftDist = Math.abs(x - rLeft);
+        if (leftDist < SNAP_THRESHOLD && (!bestX || leftDist < bestX.dist)) {
+          bestX = { value: rLeft, dist: leftDist };
+        }
+        const rightDist = Math.abs((x + width) - rRight);
+        if (rightDist < SNAP_THRESHOLD && (!bestX || rightDist < bestX.dist)) {
+          bestX = { value: rRight - width, dist: rightDist };
+        }
       }
+      if (bestX) x = bestX.value;
     }
 
     if (!skipY) {
+      let bestY = null;
       for (const room of otherRooms) {
         const rHeight = room.height || room.style?.height || 300;
         const rTop = room.position.y;
         const rBottom = rTop + rHeight;
-        if (Math.abs(y - rTop) < SNAP_THRESHOLD) { y = rTop; break; }
-        if (Math.abs((y + height) - rBottom) < SNAP_THRESHOLD) { y = rBottom - height; break; }
+
+        const topDist = Math.abs(y - rTop);
+        if (topDist < SNAP_THRESHOLD && (!bestY || topDist < bestY.dist)) {
+          bestY = { value: rTop, dist: topDist };
+        }
+        const bottomDist = Math.abs((y + height) - rBottom);
+        if (bottomDist < SNAP_THRESHOLD && (!bestY || bottomDist < bestY.dist)) {
+          bestY = { value: rBottom - height, dist: bottomDist };
+        }
       }
+      if (bestY) y = bestY.value;
     }
 
     return { x, y, width, height };
@@ -220,18 +223,6 @@ export default function MapEditor() {
     return { x: aligned.x, y: aligned.y };
   }, [snapRoomBoxToTouch, snapRoomBoxToAlign]);
 
-  // Fires continuously during a room drag — apply snapping live so the
-  // room visibly "catches" against a neighbor before you release the mouse.
-  const onNodeDrag = useCallback((event, node) => {
-    if (node.type !== 'room') return;
-
-    const snapped = getRoomSnapPosition(node, node.position.x, node.position.y);
-    if (snapped.x !== node.position.x || snapped.y !== node.position.y) {
-      setNodes((nds) => nds.map((n) =>
-        n.id === node.id ? { ...n, position: snapped } : n
-      ));
-    }
-  }, [getRoomSnapPosition, setNodes]);
 
   const loadMapData = async () => {
     try {
@@ -371,18 +362,42 @@ export default function MapEditor() {
     }
   }, [nodes]);
 
+  // Snapping is applied only at drag-END, not live during the drag. React
+  // Flow tracks drag position internally via its own mutable ref
+  // (dragItems.current) that's updated every mousemove BEFORE our
+  // onNodeDrag callback runs — so a live correction we apply via setNodes
+  // gets silently overwritten by React Flow's own tracking on the very
+  // next frame, since that ref has no idea we corrected anything. This
+  // produced exactly the inconsistent/"sometimes snaps" behavior we saw:
+  // it only stuck if you happened to release the mouse before another
+  // mousemove could stomp it. Snapping once at drag-end avoids the fight
+  // entirely — same approach already used for room resizing.
   const onNodeDragStop = useCallback(async (event, node) => {
     try {
+      let finalX = node.position.x;
+      let finalY = node.position.y;
+
+      if (node.type === 'room') {
+        const snapped = getRoomSnapPosition(node, node.position.x, node.position.y);
+        finalX = snapped.x;
+        finalY = snapped.y;
+        if (finalX !== node.position.x || finalY !== node.position.y) {
+          setNodes((nds) => nds.map((n) =>
+            n.id === node.id ? { ...n, position: { x: finalX, y: finalY } } : n
+          ));
+        }
+      }
+
       const objectId = node.data.objectId;
       await MapObjectsAPI.update(objectId, {
-        x: node.position.x,
-        y: node.position.y,
+        x: finalX,
+        y: finalY,
       });
     } catch (error) {
       console.error('Failed to update position:', error);
       showToast('Failed to update position', true);
     }
-  }, []);
+  }, [getRoomSnapPosition, setNodes]);
 
   // Fired instead of onNodeDragStop when a multi-node selection (made via
   // Shift+drag box-select) is dragged together — persist every node's
@@ -933,7 +948,6 @@ export default function MapEditor() {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={isApartmentMode ? undefined : onConnect}
-          onNodeDrag={isApartmentMode ? onNodeDrag : undefined}
           onNodeDragStop={onNodeDragStop}
           onSelectionDragStop={onSelectionDragStop}
           onNodesDelete={isApartmentMode ? undefined : onNodesDelete}

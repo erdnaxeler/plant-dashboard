@@ -9,6 +9,7 @@ import ReactFlow, {
   MarkerType,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
+import '@reactflow/node-resizer/dist/style.css';
 
 import PlantNode from './nodes/PlantNode';
 import WatererNode from './nodes/WatererNode';
@@ -35,8 +36,10 @@ export default function MapEditor() {
   const [selectedNode, setSelectedNode] = useState(null);
   const [clusters, setClusters] = useState([]);
   const [toasts, setToasts] = useState([]);
-  const [cursorMode, setCursorMode] = useState(null); // null, 'door', or 'window'
-  const [selectedOpening, setSelectedOpening] = useState(null); // {nodeId, type, id}
+  // Describes the door/window placement-or-edit popup, or null if closed.
+  // mode: 'create' (clicked empty wall) | 'edit' (right-clicked existing opening)
+  const [openingPopup, setOpeningPopup] = useState(null);
+  // { mode, nodeId, wall, offset, screenX, screenY, existingId?, existingType? }
   // mode: 'apartment' -> rooms are live/editable, plant+waterer nodes hidden
   //       'plants'    -> rooms are inert background, plant+waterer nodes live
   const [mode, setMode] = useState('plants');
@@ -47,31 +50,26 @@ export default function MapEditor() {
   }, []);
 
   // --- Room snapping -------------------------------------------------
-  // While dragging a room, if one of its edges comes within SNAP_THRESHOLD
-  // of another room's edge (and they overlap along the perpendicular axis,
-  // so they'd actually share a wall rather than just be diagonally close),
-  // snap that edge flush against the other room's edge. Visual-only: each
-  // room stays its own independent rectangle, they just end up touching
-  // with no gap instead of overlapping or leaving a sliver of space.
+  // While dragging OR resizing a room, if one of its edges comes within
+  // SNAP_THRESHOLD of another room's edge (and they overlap along the
+  // perpendicular axis, so they'd actually share a wall rather than just
+  // be diagonally close), snap that edge flush against the other room's
+  // edge. Visual-only: each room stays its own independent rectangle,
+  // they just end up touching with no gap instead of overlapping or
+  // leaving a sliver of space.
   const SNAP_THRESHOLD = 12; // px, in flow coordinates
 
-  const getRoomSnapPosition = useCallback((draggedNode, proposedX, proposedY) => {
-    const width = draggedNode.style?.width || draggedNode.width || 400;
-    const height = draggedNode.style?.height || draggedNode.height || 300;
+  // Given a candidate box {x, y, width, height} for one room, return a
+  // snapped version of just the edges that moved (controlled via which*
+  // flags), snapping each independently against every other room.
+  const snapRoomBox = useCallback((roomId, box, { snapLeft, snapRight, snapTop, snapBottom }) => {
+    const otherRooms = nodes.filter((n) => n.type === 'room' && n.id !== roomId);
 
-    const otherRooms = nodes.filter(
-      (n) => n.type === 'room' && n.id !== draggedNode.id
-    );
-
-    let snappedX = proposedX;
-    let snappedY = proposedY;
-    let snappedHorizontally = false;
-    let snappedVertically = false;
-
-    const dLeft = proposedX;
-    const dRight = proposedX + width;
-    const dTop = proposedY;
-    const dBottom = proposedY + height;
+    let { x, y, width, height } = box;
+    let snappedX = false;
+    let snappedRight = false; // right edge snapped via width adjustment
+    let snappedY = false;
+    let snappedBottom = false;
 
     for (const room of otherRooms) {
       const rWidth = room.style?.width || room.width || 400;
@@ -81,35 +79,66 @@ export default function MapEditor() {
       const rTop = room.position.y;
       const rBottom = room.position.y + rHeight;
 
-      // Vertical overlap check (needed for left/right wall snapping —
-      // the rooms must overlap in Y for a shared vertical wall to make sense)
+      const dLeft = x;
+      const dRight = x + width;
+      const dTop = y;
+      const dBottom = y + height;
+
       const verticalOverlap = dTop < rBottom && dBottom > rTop;
-      // Horizontal overlap check (needed for top/bottom wall snapping)
       const horizontalOverlap = dLeft < rRight && dRight > rLeft;
 
-      if (!snappedHorizontally && verticalOverlap) {
-        if (Math.abs(dRight - rLeft) < SNAP_THRESHOLD) {
-          snappedX = rLeft - width; // dragged room's right edge -> room's left edge
-          snappedHorizontally = true;
-        } else if (Math.abs(dLeft - rRight) < SNAP_THRESHOLD) {
-          snappedX = rRight; // dragged room's left edge -> room's right edge
-          snappedHorizontally = true;
+      // Left edge moving (dragging, or resizing from the left handle)
+      if (snapLeft && !snappedX && verticalOverlap) {
+        if (Math.abs(dLeft - rRight) < SNAP_THRESHOLD) {
+          const newX = rRight;
+          width += x - newX; // keep the opposite edge fixed when resizing from the left
+          x = newX;
+          snappedX = true;
         }
       }
 
-      if (!snappedVertically && horizontalOverlap) {
+      // Right edge moving (dragging, or resizing from the right handle)
+      if (snapRight && !snappedRight && verticalOverlap) {
+        if (Math.abs(dRight - rLeft) < SNAP_THRESHOLD) {
+          width = rLeft - x;
+          snappedRight = true;
+        }
+      }
+
+      // Top edge moving
+      if (snapTop && !snappedY && horizontalOverlap) {
+        if (Math.abs(dTop - rBottom) < SNAP_THRESHOLD) {
+          const newY = rBottom;
+          height += y - newY;
+          y = newY;
+          snappedY = true;
+        }
+      }
+
+      // Bottom edge moving
+      if (snapBottom && !snappedBottom && horizontalOverlap) {
         if (Math.abs(dBottom - rTop) < SNAP_THRESHOLD) {
-          snappedY = rTop - height; // dragged room's bottom edge -> room's top edge
-          snappedVertically = true;
-        } else if (Math.abs(dTop - rBottom) < SNAP_THRESHOLD) {
-          snappedY = rBottom; // dragged room's top edge -> room's bottom edge
-          snappedVertically = true;
+          height = rTop - y;
+          snappedBottom = true;
         }
       }
     }
 
-    return { x: snappedX, y: snappedY };
+    return { x, y, width, height };
   }, [nodes]);
+
+  // Plain-drag convenience wrapper: only the position moves, size is fixed,
+  // so all four edges are "live" and we snap against any of them.
+  const getRoomSnapPosition = useCallback((draggedNode, proposedX, proposedY) => {
+    const width = draggedNode.style?.width || draggedNode.width || 400;
+    const height = draggedNode.style?.height || draggedNode.height || 300;
+    const snapped = snapRoomBox(
+      draggedNode.id,
+      { x: proposedX, y: proposedY, width, height },
+      { snapLeft: true, snapRight: true, snapTop: true, snapBottom: true }
+    );
+    return { x: snapped.x, y: snapped.y };
+  }, [snapRoomBox]);
 
   // Fires continuously during a room drag — apply snapping live so the
   // room visibly "catches" against a neighbor before you release the mouse.
@@ -539,47 +568,86 @@ export default function MapEditor() {
     }
   };
 
-  // Handle cursor mode toggle
-  const handleCursorModeToggle = useCallback((mode) => {
-    setCursorMode(prevMode => prevMode === mode ? null : mode);
+  // --- Door/window placement & editing --------------------------------
+  // Clicking an empty spot on a wall, or right-clicking an existing
+  // door/window, opens a small popup (rendered by MapEditor, positioned
+  // at the click) offering Door / Window / (Delete, if editing). This
+  // replaces the old "activate a tool, then click a thin invisible
+  // strip" model — RoomNode just reports where on which wall something
+  // happened; MapEditor owns the popup and all the offset math, done in
+  // flow coordinates via reactFlowInstance so it stays correct at any
+  // zoom level.
+
+  // Called by RoomNode when an empty wall spot is clicked.
+  const handleWallClick = useCallback((nodeId, wall, offset, screenX, screenY) => {
+    setOpeningPopup({ mode: 'create', nodeId, wall, offset, screenX, screenY });
   }, []);
 
-  // Handle wall click to add door/window
-  const handleWallClick = useCallback((nodeId, wall, offset) => {
-    if (!cursorMode) return;
-    
+  // Called by RoomNode when an existing door/window is right-clicked.
+  const handleOpeningContextMenu = useCallback((nodeId, type, opening, screenX, screenY) => {
+    setOpeningPopup({
+      mode: 'edit',
+      nodeId,
+      wall: opening.wall,
+      offset: opening.offset,
+      screenX,
+      screenY,
+      existingId: opening.id,
+      existingType: type,
+    });
+  }, []);
+
+  const closeOpeningPopup = useCallback(() => setOpeningPopup(null), []);
+
+  // Add a new door/window, or convert an existing one to the other type,
+  // at the wall/offset stored in openingPopup.
+  const handleChooseOpeningType = useCallback((type) => {
+    if (!openingPopup) return;
+    const { nodeId, wall, offset, existingId, existingType } = openingPopup;
+
     setNodes((nds) => nds.map((node) => {
-      if (node.id === nodeId && node.type === 'room') {
-        const openings = node.data[cursorMode === 'door' ? 'doors' : 'windows'] || [];
-        const newOpening = {
-          id: `${cursorMode}-${Date.now()}`,
-          wall,
-          offset: Math.max(0, offset - 20), // Center the 40px opening
-        };
-        
-        const updatedNode = {
-          ...node,
-          data: {
-            ...node.data,
-            [cursorMode === 'door' ? 'doors' : 'windows']: [...openings, newOpening],
-          },
-        };
-        
-        // Save to backend
-        saveRoomMetadata(node.data.objectId, updatedNode.data, node.style);
-        
-        return updatedNode;
-      }
-      return node;
-    }));
-    
-    showToast(`${cursorMode === 'door' ? 'Door' : 'Window'} added`);
-  }, [cursorMode, setNodes]);
+      if (node.id !== nodeId || node.type !== 'room') return node;
 
-  // Handle opening click for selection/deletion
-  const handleOpeningClick = useCallback((nodeId, type, openingId) => {
-    setSelectedOpening({ nodeId, type, id: openingId });
-  }, []);
+      let doors = node.data.doors || [];
+      let windows = node.data.windows || [];
+
+      // If editing an existing opening, remove it first (whether we're
+      // converting it to a different type or re-saving the same type).
+      if (existingId) {
+        if (existingType === 'door') doors = doors.filter((o) => o.id !== existingId);
+        else windows = windows.filter((o) => o.id !== existingId);
+      }
+
+      const newOpening = { id: `${type}-${Date.now()}`, wall, offset };
+      if (type === 'door') doors = [...doors, newOpening];
+      else windows = [...windows, newOpening];
+
+      const updatedNode = { ...node, data: { ...node.data, doors, windows } };
+      saveRoomMetadata(node.data.objectId, updatedNode.data, node.style);
+      return updatedNode;
+    }));
+
+    showToast(existingId ? `Changed to ${type}` : `${type === 'door' ? 'Door' : 'Window'} added`);
+    setOpeningPopup(null);
+  }, [openingPopup, setNodes]);
+
+  // Delete the opening currently shown in the edit popup.
+  const handleDeleteOpeningFromPopup = useCallback(() => {
+    if (!openingPopup?.existingId) return;
+    const { nodeId, existingId, existingType } = openingPopup;
+
+    setNodes((nds) => nds.map((node) => {
+      if (node.id !== nodeId || node.type !== 'room') return node;
+      const openingKey = existingType === 'door' ? 'doors' : 'windows';
+      const updatedOpenings = (node.data[openingKey] || []).filter((o) => o.id !== existingId);
+      const updatedNode = { ...node, data: { ...node.data, [openingKey]: updatedOpenings } };
+      saveRoomMetadata(node.data.objectId, updatedNode.data, node.style);
+      return updatedNode;
+    }));
+
+    showToast(`${existingType === 'door' ? 'Door' : 'Window'} removed`);
+    setOpeningPopup(null);
+  }, [openingPopup, setNodes]);
 
   // Persist a door/window's new offset after dragging it along its wall
   const handleOpeningMove = useCallback((nodeId, type, openingId, newOffset) => {
@@ -606,36 +674,6 @@ export default function MapEditor() {
     }));
   }, [setNodes]);
 
-  // Delete selected opening
-  const handleDeleteOpening = useCallback(() => {
-    if (!selectedOpening) return;
-    
-    setNodes((nds) => nds.map((node) => {
-      if (node.id === selectedOpening.nodeId && node.type === 'room') {
-        const openingKey = selectedOpening.type === 'door' ? 'doors' : 'windows';
-        const openings = node.data[openingKey] || [];
-        const updatedOpenings = openings.filter(o => o.id !== selectedOpening.id);
-        
-        const updatedNode = {
-          ...node,
-          data: {
-            ...node.data,
-            [openingKey]: updatedOpenings,
-          },
-        };
-        
-        // Save to backend
-        saveRoomMetadata(node.data.objectId, updatedNode.data, node.style);
-        
-        return updatedNode;
-      }
-      return node;
-    }));
-    
-    setSelectedOpening(null);
-    showToast(`${selectedOpening.type === 'door' ? 'Door' : 'Window'} removed`);
-  }, [selectedOpening, setNodes]);
-
   // Save room metadata to backend
   const saveRoomMetadata = async (objectId, data, style) => {
     try {
@@ -652,17 +690,6 @@ export default function MapEditor() {
     }
   };
 
-  // Listen for delete key to remove selected opening
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === 'Delete' && selectedOpening) {
-        handleDeleteOpening();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedOpening, handleDeleteOpening]);
-
   // Switch between apartment-editing mode and plants mode
   const handleSetMode = useCallback((newMode) => {
     setMode(newMode);
@@ -674,20 +701,44 @@ export default function MapEditor() {
     showToast(newMode === 'apartment' ? 'Editing apartment layout' : 'Apartment locked');
   }, []);
 
-  // Persist a room resize (called from RoomNode's NodeResizer onResizeEnd)
-  const handleRoomResize = useCallback((nodeId, width, height) => {
+  // Persist a room resize (called from RoomNode's NodeResizer onResizeEnd).
+  // Snaps the edge(s) that moved against any neighboring room before saving.
+  const handleRoomResize = useCallback(async (nodeId, x, y, width, height, direction) => {
+    const dir = direction || [0, 0];
+    const snapped = snapRoomBox(
+      nodeId,
+      { x, y, width, height },
+      {
+        snapLeft: dir[0] === -1,
+        snapRight: dir[0] === 1,
+        snapTop: dir[1] === -1,
+        snapBottom: dir[1] === 1,
+      }
+    );
+
     setNodes((nds) => nds.map((node) => {
       if (node.id === nodeId && node.type === 'room') {
         const updatedNode = {
           ...node,
-          style: { ...node.style, width, height },
+          position: { x: snapped.x, y: snapped.y },
+          style: { ...node.style, width: snapped.width, height: snapped.height },
         };
         saveRoomMetadata(node.data.objectId, node.data, updatedNode.style);
         return updatedNode;
       }
       return node;
     }));
-  }, [setNodes]);
+
+    // Position isn't part of metadata — it's map_x/map_y on the object itself
+    const node = nodes.find((n) => n.id === nodeId);
+    if (node) {
+      try {
+        await MapObjectsAPI.update(node.data.objectId, { x: snapped.x, y: snapped.y });
+      } catch (error) {
+        console.error('Failed to update room position after resize:', error);
+      }
+    }
+  }, [snapRoomBox, setNodes, nodes]);
 
   // Inject mode-aware callbacks/flags into each node's data right before
   // render. This is the one place that decides what's interactive —
@@ -701,18 +752,17 @@ export default function MapEditor() {
         data: {
           ...node.data,
           locked: !isApartmentMode,
-          cursorMode: isApartmentMode ? cursorMode : null,
           onWallClick: isApartmentMode
-            ? (wall, offset) => handleWallClick(node.id, wall, offset)
+            ? (wall, offset, screenX, screenY) => handleWallClick(node.id, wall, offset, screenX, screenY)
             : undefined,
-          onOpeningClick: isApartmentMode
-            ? (type, id) => handleOpeningClick(node.id, type, id)
+          onOpeningContextMenu: isApartmentMode
+            ? (type, opening, screenX, screenY) => handleOpeningContextMenu(node.id, type, opening, screenX, screenY)
             : undefined,
           onOpeningMove: isApartmentMode
             ? (type, id, newOffset) => handleOpeningMove(node.id, type, id, newOffset)
             : undefined,
           onResize: isApartmentMode
-            ? (width, height) => handleRoomResize(node.id, width, height)
+            ? (x, y, width, height, direction) => handleRoomResize(node.id, x, y, width, height, direction)
             : undefined,
         },
       };
@@ -736,8 +786,6 @@ export default function MapEditor() {
       />
       <LeftPanel 
         onAddNode={handleAddNode}
-        cursorMode={cursorMode}
-        onCursorModeToggle={handleCursorModeToggle}
         apartmentMode={isApartmentMode}
       />
       {!isApartmentMode && (
@@ -766,6 +814,7 @@ export default function MapEditor() {
           onInit={setReactFlowInstance}
           onDrop={onDrop}
           onDragOver={onDragOver}
+          onPaneClick={closeOpeningPopup}
           nodeTypes={nodeTypes}
           nodesConnectable={!isApartmentMode}
           fitView
@@ -789,6 +838,41 @@ export default function MapEditor() {
           )}
           <Background variant="dots" gap={20} size={1} />
         </ReactFlow>
+
+        {openingPopup && (
+          <>
+            {/* Invisible backdrop so clicking anywhere outside the popup closes it */}
+            <div className="opening-popup-backdrop" onClick={closeOpeningPopup} />
+            <div
+              className="opening-popup"
+              style={{ left: openingPopup.screenX, top: openingPopup.screenY }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                className="opening-popup-btn door"
+                disabled={openingPopup.existingType === 'door'}
+                onClick={() => handleChooseOpeningType('door')}
+              >
+                Door
+              </button>
+              <button
+                className="opening-popup-btn window"
+                disabled={openingPopup.existingType === 'window'}
+                onClick={() => handleChooseOpeningType('window')}
+              >
+                Window
+              </button>
+              {openingPopup.existingId && (
+                <button
+                  className="opening-popup-btn delete"
+                  onClick={handleDeleteOpeningFromPopup}
+                >
+                  Delete
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       <div className="toast-container">

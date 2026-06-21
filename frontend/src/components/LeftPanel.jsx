@@ -1,7 +1,7 @@
 import React from 'react';
 import './LeftPanel.css';
 
-export default function LeftPanel({ onAddNode, cursorMode, onCursorModeToggle, apartmentMode }) {
+export default function LeftPanel({ onAddNode, apartmentMode }) {
   const onDragStart = (event, nodeType) => {
     event.dataTransfer.setData('application/reactflow', nodeType);
     event.dataTransfer.effectAllowed = 'move';
@@ -55,39 +55,19 @@ export default function LeftPanel({ onAddNode, cursorMode, onCursorModeToggle, a
           )}
         </div>
         <div className="panel-hint">
-          Drag onto canvas or click to add
+          {apartmentMode
+            ? 'Drag onto canvas or click to add a room'
+            : 'Drag onto canvas or click to add'}
         </div>
       </div>
 
       {apartmentMode && (
         <div className="panel-section">
-          <h3 className="panel-title">Wall Tools</h3>
-          <div className="tools-grid">
-            <div
-              className={`tool-item cursor-tool door-tool ${cursorMode === 'door' ? 'active' : ''}`}
-              onClick={() => onCursorModeToggle('door')}
-            >
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="6" y="4" width="12" height="16" rx="1" />
-                <circle cx="15" cy="12" r="1" fill="currentColor" />
-              </svg>
-              <span>Door</span>
-            </div>
-
-            <div
-              className={`tool-item cursor-tool window-tool ${cursorMode === 'window' ? 'active' : ''}`}
-              onClick={() => onCursorModeToggle('window')}
-            >
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="5" y="7" width="14" height="10" rx="1" />
-                <line x1="12" y1="7" x2="12" y2="17" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-              <span>Window</span>
-            </div>
-          </div>
+          <h3 className="panel-title">Doors & Windows</h3>
           <div className="panel-hint">
-            {cursorMode ? `Click on room walls to place ${cursorMode}s` : 'Click to activate cursor mode'}
+            Hover a room's wall and click to add a door or window.
+            Drag an existing one to reposition it, or right-click it to
+            change its type or remove it.
           </div>
         </div>
       )}

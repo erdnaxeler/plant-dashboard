@@ -16,3 +16,66 @@
 .react-flow__attribution {
   display: none;
 }
+
+.opening-popup-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 999;
+}
+
+.opening-popup {
+  position: fixed;
+  z-index: 1000;
+  transform: translate(-50%, -100%) translateY(-8px);
+  display: flex;
+  gap: 4px;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.opening-popup-btn {
+  border: 1px solid var(--border);
+  background: var(--bg-medium);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.opening-popup-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--bg-light);
+}
+
+.opening-popup-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.opening-popup-btn.door:not(:disabled):hover {
+  border-color: #8B4513;
+}
+
+.opening-popup-btn.window:not(:disabled):hover {
+  border-color: #4A90E2;
+}
+
+.opening-popup-btn.delete {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.opening-popup-btn.delete:hover {
+  background: var(--red);
+  color: white;
+}

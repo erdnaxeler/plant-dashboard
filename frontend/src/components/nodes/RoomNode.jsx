@@ -1,5 +1,5 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { Handle, Position, NodeResizer } from 'reactflow';
+import { Handle, Position, NodeResizer, useReactFlow } from 'reactflow';
 import './NodeStyles.css';
 
 const OPENING_SIZE = 40; // keep in sync with offset math in MapEditor.jsx
@@ -9,6 +9,8 @@ export default function RoomNode({ data, selected }) {
   const windows = data.windows || [];
   const locked = !!data.locked;
   const roomRef = useRef(null);
+  const lastResizeDirection = useRef([0, 0]);
+  const { screenToFlowPosition } = useReactFlow();
 
   // While dragging a door/window we track a live offset locally so the
   // UI is instantly responsive, then commit the final value on mouseup
@@ -16,38 +18,47 @@ export default function RoomNode({ data, selected }) {
   const [dragState, setDragState] = useState(null); // { type, id, wall, offset, moved } | null
   const DRAG_THRESHOLD = 3; // px of movement before we treat it as a drag, not a click
 
-  // Handle wall clicks to add door/window when in cursor mode
+  // Click an empty spot on a wall to place a door/window there. The wall
+  // hit-zones are always active (just hover-highlighted via CSS) — there's
+  // no separate "tool" to turn on first. Offset is computed in *flow*
+  // coordinates via screenToFlowPosition so placement stays correct at
+  // any zoom/pan level, rather than relying on getBoundingClientRect()
+  // (which is in screen pixels and drifts from the stored flow-space
+  // offset as soon as you're not at 100% zoom).
   const handleWallClick = (e, wall) => {
-    if (locked || !data.cursorMode) return; // not placing a door/window — let the click through to select/drag the room
-    e.stopPropagation();
-    if (data.onWallClick) {
-      const rect = e.currentTarget.getBoundingClientRect();
-      let offset;
-      
-      if (wall === 'top' || wall === 'bottom') {
-        offset = e.clientX - rect.left;
-      } else {
-        offset = e.clientY - rect.top;
-      }
-      
-      data.onWallClick(wall, offset);
-    }
-  };
-
-  // Handle door/window click for selection/deletion — ignored if the
-  // preceding mousedown turned into a real drag (handled via dragState).
-  const handleOpeningClick = (e, type, id) => {
     if (locked) return;
     e.stopPropagation();
-    if (dragState?.moved) return; // this click is the tail end of a drag, not a selection
-    if (data.onOpeningClick) {
-      data.onOpeningClick(type, id);
+    if (!data.onWallClick) return;
+
+    const roomEl = roomRef.current;
+    if (!roomEl) return;
+    const roomRect = roomEl.getBoundingClientRect();
+    const flowClick = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    const flowRoomOrigin = screenToFlowPosition({ x: roomRect.left, y: roomRect.top });
+
+    const isHorizontalWall = wall === 'top' || wall === 'bottom';
+    const rawOffset = isHorizontalWall
+      ? flowClick.x - flowRoomOrigin.x
+      : flowClick.y - flowRoomOrigin.y;
+    const offset = Math.max(0, rawOffset - OPENING_SIZE / 2);
+
+    data.onWallClick(wall, offset, e.clientX, e.clientY);
+  };
+
+  // Right-click an existing door/window to reopen the same popup (now
+  // pre-filled) so it can be converted to the other type or deleted.
+  const handleOpeningContextMenu = (e, type, opening) => {
+    if (locked) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (data.onOpeningContextMenu) {
+      data.onOpeningContextMenu(type, opening, e.clientX, e.clientY);
     }
   };
 
   // Start dragging an existing door/window along its wall
   const handleOpeningMouseDown = (e, type, opening) => {
-    if (locked || data.cursorMode) return; // don't drag while actively placing new ones
+    if (locked || e.button !== 0) return; // left-click only; right-click is handled by context menu
     e.stopPropagation();
     e.preventDefault();
     setDragState({
@@ -89,8 +100,6 @@ export default function RoomNode({ data, selected }) {
         }
         return prev ? { ...prev, justFinished: true } : null;
       });
-      // Clear the "just finished" marker after the click event has had a
-      // chance to read dragState.moved and bail out.
       setTimeout(() => setDragState(null), 0);
     };
 
@@ -117,7 +126,14 @@ export default function RoomNode({ data, selected }) {
           minWidth={120}
           minHeight={100}
           isVisible={selected}
-          onResizeEnd={(_, params) => data.onResize && data.onResize(params.width, params.height)}
+          onResize={(_, params) => {
+            lastResizeDirection.current = params.direction || [0, 0];
+          }}
+          onResizeEnd={(_, params) => {
+            if (data.onResize) {
+              data.onResize(params.x, params.y, params.width, params.height, lastResizeDirection.current);
+            }
+          }}
         />
       )}
 
@@ -130,8 +146,8 @@ export default function RoomNode({ data, selected }) {
             [door.wall === 'top' || door.wall === 'bottom' ? 'left' : 'top']: `${resolvedOffset('door', door)}px`,
             cursor: locked ? 'default' : 'grab',
           }}
-          onClick={(e) => handleOpeningClick(e, 'door', door.id)}
           onMouseDown={(e) => handleOpeningMouseDown(e, 'door', door)}
+          onContextMenu={(e) => handleOpeningContextMenu(e, 'door', door)}
         />
       ))}
       
@@ -144,22 +160,22 @@ export default function RoomNode({ data, selected }) {
             [window.wall === 'top' || window.wall === 'bottom' ? 'left' : 'top']: `${resolvedOffset('window', window)}px`,
             cursor: locked ? 'default' : 'grab',
           }}
-          onClick={(e) => handleOpeningClick(e, 'window', window.id)}
           onMouseDown={(e) => handleOpeningMouseDown(e, 'window', window)}
+          onContextMenu={(e) => handleOpeningContextMenu(e, 'window', window)}
         >
           <div className="window-pane-divider" />
         </div>
       ))}
 
-      {/* Invisible click areas for walls - only intercept clicks while
-          actively placing a door/window, so they never block selecting
-          or resizing the room the rest of the time */}
+      {/* Wall hit-zones — always active when unlocked. Hover reveals a
+          highlight + crosshair cursor via CSS; click opens the placement
+          popup. No separate "tool" needs to be turned on first. */}
       {!locked && (
         <>
-          <div className={`wall-click-area top ${data.cursorMode ? 'active-cursor nodrag' : ''}`} onClick={(e) => handleWallClick(e, 'top')} />
-          <div className={`wall-click-area right ${data.cursorMode ? 'active-cursor nodrag' : ''}`} onClick={(e) => handleWallClick(e, 'right')} />
-          <div className={`wall-click-area bottom ${data.cursorMode ? 'active-cursor nodrag' : ''}`} onClick={(e) => handleWallClick(e, 'bottom')} />
-          <div className={`wall-click-area left ${data.cursorMode ? 'active-cursor nodrag' : ''}`} onClick={(e) => handleWallClick(e, 'left')} />
+          <div className="wall-click-area nodrag top" onClick={(e) => handleWallClick(e, 'top')} />
+          <div className="wall-click-area nodrag right" onClick={(e) => handleWallClick(e, 'right')} />
+          <div className="wall-click-area nodrag bottom" onClick={(e) => handleWallClick(e, 'bottom')} />
+          <div className="wall-click-area nodrag left" onClick={(e) => handleWallClick(e, 'left')} />
         </>
       )}
 

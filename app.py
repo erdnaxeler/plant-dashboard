@@ -1243,8 +1243,9 @@ def api_cluster_pairing_code(public_id):
     c = Cluster.query.filter_by(public_id=public_id).first()
     if not c:
         return jsonify({"error": "not found"}), 404
-    if not c.is_calibrated:
-        return jsonify({"error": "calibrate cluster before pairing"}), 400
+    # Pairing is a link between the physical device and its node — independent
+    # of plants/calibration. (Calibration still gates the watering-math
+    # endpoints: log-manual-watering, preferred-hour, initialize-schedule.)
     if c.device_token:
         return jsonify({"error": "device already paired; revoke first"}), 400
 
@@ -1671,57 +1672,47 @@ def _update_cluster_from_connections(waterer_id: int) -> Optional[str]:
     Returns error message if validation fails, None on success.
     """
     waterer, plants = _find_connected_objects(waterer_id)
-    
+
     if not waterer:
         return "Waterer not found"
-    
-    # Clear cluster if no valid configuration
-    if len(plants) == 0 or len(plants) > 3:
-        # Clear cluster assignments for this waterer and its plants
-        if waterer.cluster_id:
-            cluster = Cluster.query.get(waterer.cluster_id)
-            if cluster:
-                # Clear cluster_id from all map objects
-                MapObject.query.filter_by(cluster_id=cluster.id).update(
-                    {MapObject.cluster_id: None}, synchronize_session=False
-                )
-                db.session.delete(cluster)
-        waterer.cluster_id = None
-        for plant in plants:
-            plant.cluster_id = None
+
+    # The waterer owns a persistent device record (its cluster). It is created
+    # with the waterer and never deleted on disconnect — connecting/disconnecting
+    # plants only attaches or detaches them, so pairing/calibration/history
+    # survive plant changes. (Fallback-create here for waterers that predate
+    # creation-time provisioning.)
+    cluster = Cluster.query.get(waterer.cluster_id) if waterer.cluster_id else None
+    if not cluster:
+        cluster = Cluster(name=waterer.name, is_calibrated=False)
+        db.session.add(cluster)
+        db.session.flush()
+        waterer.cluster_id = cluster.id
+
+    # Detach every plant currently on this device, then re-attach the ones
+    # that are actually connected now. A plant that was disconnected falls off
+    # cleanly; the device record itself is untouched.
+    MapObject.query.filter(
+        MapObject.cluster_id == cluster.id,
+        MapObject.type == "plant",
+    ).update({MapObject.cluster_id: None}, synchronize_session=False)
+
+    # More than 3 plants is already rejected at connection time; if it ever
+    # happens, leave the device alone and just don't over-attach.
+    if len(plants) > 3:
         db.session.commit()
         return None
-    
-    # Valid configuration: 1 waterer + 1-3 plants
-    
-    # Task #5: Implement inheritance - when 1 plant connected, waterer inherits its properties
+
+    # When exactly one plant is connected, the waterer inherits its pot/schedule.
     if len(plants) == 1:
         plant = plants[0]
-        # Inherit pot size and plant type from the single connected plant
         if plant.plant_pot_size:
             waterer.waterer_optimized_pot_size = plant.plant_pot_size
         if plant.plant_watering_schedule:
             waterer.waterer_schedule = plant.plant_watering_schedule
-    # When 2+ plants: waterer keeps its existing settings (no inheritance)
-    
-    # Create or update cluster
-    cluster = None
-    if waterer.cluster_id:
-        cluster = Cluster.query.get(waterer.cluster_id)
-    
-    if not cluster:
-        cluster = Cluster(
-            name=f"{waterer.name} Cluster",
-            is_calibrated=False,
-        )
-        db.session.add(cluster)
-        db.session.flush()
-    
-    # Assign cluster to waterer and all connected plants
-    waterer.cluster_id = cluster.id
+
     for plant in plants:
         plant.cluster_id = cluster.id
-    
+
     db.session.commit()
     return None
 
@@ -1776,8 +1767,19 @@ def api_map_objects_create():
         map_y=map_y,
     )
     db.session.add(obj)
+    db.session.flush()
+
+    # A waterer node owns a persistent device record (cluster) from birth, so
+    # all device controls (pairing, pump test, etc.) are available immediately,
+    # independent of whether any plants are connected.
+    if obj_type == "waterer":
+        cluster = Cluster(name=obj.name, is_calibrated=False)
+        db.session.add(cluster)
+        db.session.flush()
+        obj.cluster_id = cluster.id
+
     db.session.commit()
-    
+
     return jsonify(_serialize_map_object(obj)), 201
 
 
@@ -1882,14 +1884,18 @@ def api_map_objects_delete(object_id):
     db.session.delete(obj)
     db.session.commit()
     
-    # If this was a waterer with a cluster, recalculate cluster assignments
+    # Deleting the waterer node retires its device record. Detach plants,
+    # clear its watering history (watering_log.cluster_ref has no ON DELETE,
+    # so deleting the cluster first would FK-violate on Postgres), then drop
+    # the cluster.
     if obj_type == "waterer" and cluster_id:
-        # The cluster is now orphaned, clean it up
         cluster = Cluster.query.get(cluster_id)
         if cluster:
             MapObject.query.filter_by(cluster_id=cluster_id).update(
                 {MapObject.cluster_id: None}, synchronize_session=False
             )
+            WateringLog.query.filter_by(cluster_ref=cluster_id).delete(synchronize_session=False)
+            cluster.catalog_plants.clear()
             db.session.delete(cluster)
             db.session.commit()
     

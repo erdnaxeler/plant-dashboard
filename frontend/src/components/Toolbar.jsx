@@ -44,7 +44,6 @@ export default function Toolbar({ onZoomIn, onZoomOut, onFitView, mode, onSetMod
             <path d="M9,3V4H4V9H3V3H9M4,11V13H3V11H4M11,3H13V4H11V3M4,15V17H3V15H4M15,3H17V4H15V3M4,19V20H9V21H3V19H4M19,3V9H20V3H19M11,20V21H13V20H11M15,20V21H17V20H15M20,11V13H21V11H20M20,15V17H21V15H20M20,19V21H14V20H20V19H21" />
           </svg>
         </button>
-        <a href="/" className="toolbar-btn">Dashboard</a>
       </div>
     </div>
   );

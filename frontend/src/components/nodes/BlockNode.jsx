@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import { NodeResizer } from 'reactflow';
 import './NodeStyles.css';
+import { edgesMoved } from './resizeUtils';
 
 // BlockNode handles garden, terrace, and furniture — the three "block"
 // types that are simpler than rooms (no doors, no windows, no wall-click
@@ -14,7 +15,9 @@ export default function BlockNode({ data, selected }) {
   const locked = !!data.locked;
   const blockType = data.blockType; // 'garden' | 'terrace' | 'furniture'
   const rotation = data.rotation || 0; // 0 | 90 | 180 | 270
-  const lastResizeDirection = useRef([0, 0]);
+  // Box at resize-start; we derive moved edges from start-vs-end geometry
+  // rather than node-resizer's last-tick `direction`. See resizeUtils.
+  const resizeStartBox = useRef(null);
 
   const dropBorder = data.touchingEdges || {};
   const borderStyle = {
@@ -54,12 +57,12 @@ export default function BlockNode({ data, selected }) {
           minWidth={40}
           minHeight={40}
           isVisible={selected}
-          onResize={(_, params) => {
-            lastResizeDirection.current = params.direction || [0, 0];
+          onResizeStart={(_, params) => {
+            resizeStartBox.current = { x: params.x, y: params.y, width: params.width, height: params.height };
           }}
           onResizeEnd={(_, params) => {
             if (data.onResize) {
-              data.onResize(params.x, params.y, params.width, params.height, lastResizeDirection.current);
+              data.onResize(params.x, params.y, params.width, params.height, edgesMoved(resizeStartBox.current, params));
             }
           }}
         />

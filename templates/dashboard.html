@@ -1361,41 +1361,50 @@
       }
     }
 
-    function localTimeToUTCHour(hours, minutes, timezone) {
-      // Create a date string in the given timezone
+   function localTimeToUTCHour(hours, minutes, timezone) {
+      // Convert a local "HH:MM" time (in the given IANA timezone) to a UTC
+      // hour (0-23), for today's date in that timezone.
+      //
+      // Uses Intl.DateTimeFormat's formatToParts (structured data, not
+      // string-splitting) and resolves the current UTC offset directly —
+      // correct across DST transitions and fractional-hour offsets
+      // (e.g. Asia/Kolkata, UTC+5:30), unlike the previous implementation.
+      minutes = minutes || 0;
       const now = new Date();
-      const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
-      
-      // Parse with timezone offset
-      const formatter = new Intl.DateTimeFormat('en-US', {
+
+      const guessUtc = new Date(Date.UTC(
+        now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
+        hours, minutes, 0
+      ));
+
+      const dtf = new Intl.DateTimeFormat('en-US', {
         timeZone: timezone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false
+        hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit',
       });
-      
-      // Get offset by comparing UTC vs local
-      const utcDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes));
-      const parts = formatter.formatToParts(new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes));
-      
-      // Simple approach: create date in local, get UTC hours
-      // This assumes the date object's timezone methods work
-      const testDate = new Date(dateStr);
-      const utcHours = new Date(testDate.toLocaleString('en-US', { timeZone: 'UTC' })).getHours();
-      
-      // Fallback: manual calculation
-      try {
-        const localDate = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
-        const utcDateNow = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
-        const offset = (localDate - utcDateNow) / (1000 * 60 * 60);
-        return (hours - offset + 24) % 24;
-      } catch (e) {
-        // Fallback to browser timezone
-        return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes).getUTCHours();
-      }
+
+      const parts = dtf.formatToParts(guessUtc);
+      const map = {};
+      for (const p of parts) map[p.type] = p.value;
+      let localHour = parseInt(map.hour, 10);
+      if (localHour === 24) localHour = 0; // some engines render midnight as "24"
+
+      const local = {
+        year: parseInt(map.year, 10),
+        month: parseInt(map.month, 10),
+        day: parseInt(map.day, 10),
+        hour: localHour,
+        minute: parseInt(map.minute, 10),
+      };
+
+      const localAsUtcMs = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute);
+      const offsetMinutes = (localAsUtcMs - guessUtc.getTime()) / 60000;
+
+      let totalMinutes = hours * 60 + minutes - offsetMinutes;
+      totalMinutes = ((totalMinutes % 1440) + 1440) % 1440; // wrap into [0, 1440)
+
+      return Math.floor(totalMinutes / 60);
     }
 
     function utcHourToLocalTime(utcHour, timezone) {

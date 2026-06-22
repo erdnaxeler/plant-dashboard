@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ClustersAPI, CatalogPlantsAPI, MapObjectsAPI } from '../hooks/useApi';
+import { localTimeToUTCHour, utcHourToLocalTime } from '../utils/timezone';
 import './PropertiesPanel.css';
 
 const POT_SIZES = {
@@ -157,15 +158,63 @@ export default function WatererPanel({
 
   const handleVolumeChange = async (newPct) => {
     if (!cluster) return;
-    
+
     setVolumePct(newPct);
-    
+
     try {
       await ClustersAPI.setVolume(cluster.public_id, newPct);
       onUpdate();
     } catch (error) {
       console.error('Failed to update volume:', error);
       alert('Failed to update volume');
+    }
+  };
+
+  const handleClearFault = async () => {
+    if (!cluster) return;
+    try {
+      await ClustersAPI.clearFault(cluster.public_id);
+      onUpdate();
+    } catch (error) {
+      alert(error.response?.data?.error || 'Failed to clear fault');
+    }
+  };
+
+  const handleTogglePumpTest = async () => {
+    if (!cluster) return;
+    try {
+      await ClustersAPI.togglePumpTest(cluster.public_id);
+      onUpdate();
+    } catch (error) {
+      alert(error.response?.data?.error || 'Pump test toggle failed');
+    }
+  };
+
+  const handleLogManualWatering = async () => {
+    if (!cluster) return;
+    try {
+      await ClustersAPI.logManualWatering(cluster.public_id);
+      onUpdate();
+    } catch (error) {
+      alert(error.response?.data?.error || 'Failed to log watering');
+    }
+  };
+
+  // Preferred watering time: UI is local "HH:MM" in the cluster's timezone;
+  // we store the UTC hour. Empty string clears the preference.
+  const handlePreferredTimeChange = async (localTime) => {
+    if (!cluster) return;
+    try {
+      if (!localTime) {
+        await ClustersAPI.setPreferredHour(cluster.public_id, null);
+      } else {
+        const tz = cluster.timezone || 'UTC';
+        const [h, m] = localTime.split(':').map(Number);
+        await ClustersAPI.setPreferredHour(cluster.public_id, localTimeToUTCHour(h, m || 0, tz));
+      }
+      onUpdate();
+    } catch (error) {
+      alert(error.response?.data?.error || 'Failed to set preferred time');
     }
   };
 
@@ -349,62 +398,104 @@ export default function WatererPanel({
             <div className="divider"></div>
             
             <div className="cluster-section">
-              <h4>Cluster Configuration</h4>
+              <h4>Device</h4>
 
-              {/* Task #6 & #7: Removed cluster name, status, and calibration UI */}
-              
-              <div className="property-group">
-                <label>Pot Size</label>
-                <div className="property-value">{POT_SIZES[cluster.pot_size] || 'Not set'}</div>
-              </div>
-
-              <div className="property-group">
-                <label>Plant Types</label>
-                <div className="property-value">
-                  {cluster.catalog_plants?.map(p => p.name).join(', ') || 'None'}
-                </div>
-              </div>
-
-              <div className="property-group">
-                <label>Watering Group</label>
-                <div className="property-value">{cluster.watering_group || 'Not set'}</div>
-              </div>
-
-              {cluster.ml_per_event && (
+              {/* Calibration sets the watering amount (pot size + plant types).
+                  It's the watering-math setup — independent of pairing. */}
+              {!cluster.is_calibrated ? (
                 <div className="property-group">
-                  <label>Base Amount</label>
-                  <div className="property-value">
-                    {cluster.ml_per_event} ml per event
+                  <label>Calibrate (pot size + plants)</label>
+                  <select value={potSize} onChange={(e) => setPotSize(e.target.value)}>
+                    <option value="">Select pot size...</option>
+                    {Object.entries(POT_SIZES).map(([k, v]) => (
+                      <option key={k} value={k}>{v}</option>
+                    ))}
+                  </select>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '8px' }}>
+                    {catalogPlants.map(p => (
+                      <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedPlantIds.includes(p.id)}
+                          onChange={() => togglePlantSelection(p.id)}
+                        />
+                        {p.name} <span style={{ color: 'var(--text-dim)' }}>({p.watering_group})</span>
+                      </label>
+                    ))}
                   </div>
+                  <button className="btn-primary" style={{ marginTop: '8px' }} onClick={handleCalibrate}>
+                    Calibrate
+                  </button>
                 </div>
-              )}
-
-              <div className="property-group">
-                <label>Volume Adjustment</label>
-                <input
-                  type="range"
-                  min="50"
-                  max="150"
-                  value={volumePct}
-                  onChange={(e) => handleVolumeChange(Number(e.target.value))}
-                  style={{ width: '100%' }}
-                />
-                <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '14px' }}>
-                  {volumePct}% {cluster.ml_per_event ? `(${Math.round(cluster.ml_per_event * volumePct / 100)} ml)` : ''}
-                </div>
-              </div>
-
-              {cluster.next_watering_at && (
-                <div className="property-group">
-                  <label>Next Watering</label>
-                  <div className="property-value">
-                    {new Date(cluster.next_watering_at).toLocaleString()}
+              ) : (
+                <>
+                  <div className="property-group">
+                    <label>Pot Size</label>
+                    <div className="property-value">{POT_SIZES[cluster.pot_size] || 'Not set'}</div>
                   </div>
-                </div>
+
+                  <div className="property-group">
+                    <label>Plant Types</label>
+                    <div className="property-value">
+                      {cluster.catalog_plants?.map(p => p.name).join(', ') || 'None'}
+                    </div>
+                  </div>
+
+                  <div className="property-group">
+                    <label>Watering Group</label>
+                    <div className="property-value">{cluster.watering_group || 'Not set'}</div>
+                  </div>
+
+                  {cluster.ml_per_event ? (
+                    <div className="property-group">
+                      <label>Base Amount</label>
+                      <div className="property-value">{cluster.ml_per_event} ml per event</div>
+                    </div>
+                  ) : null}
+
+                  <div className="property-group">
+                    <label>Volume Adjustment</label>
+                    <input
+                      type="range"
+                      min="50"
+                      max="150"
+                      value={volumePct}
+                      onChange={(e) => handleVolumeChange(Number(e.target.value))}
+                      style={{ width: '100%' }}
+                    />
+                    <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '14px' }}>
+                      {volumePct}% {cluster.ml_per_event ? `(${Math.round(cluster.ml_per_event * volumePct / 100)} ml)` : ''}
+                    </div>
+                  </div>
+
+                  <div className="property-group">
+                    <label>Preferred Watering Time{cluster.timezone ? ` (${cluster.timezone})` : ''}</label>
+                    <input
+                      type="time"
+                      value={utcHourToLocalTime(cluster.preferred_watering_hour_utc, cluster.timezone)}
+                      onChange={(e) => handlePreferredTimeChange(e.target.value)}
+                    />
+                    <small style={{ color: 'var(--text-dim)' }}>Leave empty to water anytime</small>
+                  </div>
+
+                  {cluster.next_watering_at && (
+                    <div className="property-group">
+                      <label>Next Watering</label>
+                      <div className="property-value">
+                        {new Date(cluster.next_watering_at).toLocaleString()}
+                      </div>
+                    </div>
+                  )}
+
+                  <button className="btn-secondary" onClick={handleLogManualWatering}>
+                    💧 Log Manual Watering
+                  </button>
+                </>
               )}
 
               <div className="divider"></div>
 
+              {/* Pairing is a device link — available regardless of calibration */}
               {!cluster.has_device && (
                 <button className="btn-primary" onClick={handleGetPairingCode}>
                   Get Pairing Code
@@ -424,6 +515,7 @@ export default function WatererPanel({
                     <label>Device Status</label>
                     <div className="property-value">
                       {cluster.device_status === 'ok' ? '✓ Connected' : cluster.device_status}
+                      {cluster.status_message ? ` — ${cluster.status_message}` : ''}
                     </div>
                   </div>
 
@@ -436,6 +528,12 @@ export default function WatererPanel({
                       ▶ Start Watering
                     </button>
                   )}
+                  <button className="btn-secondary" onClick={handleTogglePumpTest} style={{ marginTop: '8px' }}>
+                    {cluster.pump_test_mode ? '■ Stop Pump Test' : '⚙ Pump Test'}
+                  </button>
+                  <button className="btn-secondary" onClick={handleClearFault} style={{ marginTop: '8px' }}>
+                    Clear Fault
+                  </button>
                   <button className="btn-secondary" onClick={handleUnpair} style={{ marginTop: '8px' }}>
                     Unpair Device
                   </button>

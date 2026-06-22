@@ -1,7 +1,8 @@
 import React from 'react';
+import { COMMON_TIMEZONES } from '../utils/timezone';
 import './Toolbar.css';
 
-export default function Toolbar({ onZoomIn, onZoomOut, onFitView, mode, onSetMode }) {
+export default function Toolbar({ onZoomIn, onZoomOut, onFitView, mode, onSetMode, timezone, onSetTimezone }) {
   return (
     <div className="toolbar">
       <div className="toolbar-left">
@@ -29,6 +30,18 @@ export default function Toolbar({ onZoomIn, onZoomOut, onFitView, mode, onSetMod
       </div>
       
       <div className="toolbar-right">
+        {onSetTimezone && (
+          <select
+            className="toolbar-tz"
+            value={timezone || 'UTC'}
+            onChange={(e) => onSetTimezone(e.target.value)}
+            title="Home timezone (used for watering schedule)"
+          >
+            {COMMON_TIMEZONES.map((tz) => (
+              <option key={tz} value={tz}>{tz}</option>
+            ))}
+          </select>
+        )}
         <button className="toolbar-btn" onClick={onZoomOut} title="Zoom Out">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
             <path d="M19,13H5V11H19V13Z" />

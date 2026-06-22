@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MapObjectsAPI, ClustersAPI, CatalogPlantsAPI } from '../hooks/useApi';
+import { MapObjectsAPI, ClustersAPI, CatalogPlantsAPI, PlantHistoryAPI } from '../hooks/useApi';
 import './PropertiesPanel.css';
 
 const WATERING_GROUPS = {
@@ -33,10 +33,10 @@ export default function PlantPanel({
   }, [plantNode]);
 
   useEffect(() => {
-    if (cluster) {
+    if (plantNode) {
       loadWateringHistory();
     }
-  }, [cluster]);
+  }, [plantNode, cluster]);
 
   const loadCatalogPlants = async () => {
     try {
@@ -61,17 +61,15 @@ export default function PlantPanel({
     }
   };
 
+  // Per-plant history (keyed by this plant node), so it follows the plant
+  // even when it's moved to a different waterer.
   const loadWateringHistory = async () => {
-    if (!cluster) return;
-    
+    if (!plantNode) return;
+
     try {
-      const response = await fetch(`/api/app/cluster/${cluster.public_id}/waterings`, {
-        headers: {
-          Authorization: `Bearer ${sessionStorage.getItem('dashToken')}`
-        }
-      });
-      const data = await response.json();
-      setWateringHistory(data.slice(0, 10)); // Last 10 waterings
+      const data = await PlantHistoryAPI.getWaterings(plantNode.data.objectId);
+      // Endpoint returns ascending; show the most recent 10.
+      setWateringHistory(data.slice(-10).reverse());
     } catch (error) {
       console.error('Failed to load watering history:', error);
     }
@@ -298,8 +296,8 @@ export default function PlantPanel({
           </div>
         )}
 
-        {/* Watering History */}
-        {cluster && (
+        {/* Watering History — this plant's own, follows it across waterers */}
+        {plantNode && (
           <>
             <div className="divider"></div>
             
@@ -334,7 +332,7 @@ export default function PlantPanel({
                           fontSize: '13px'
                         }}
                       >
-                        <span>{new Date(event.created_at).toLocaleDateString()}</span>
+                        <span>{new Date(event.time).toLocaleDateString()}</span>
                         <span style={{ fontWeight: '600', color: '#4ec9b0' }}>
                           {event.ml} ml
                         </span>
@@ -369,7 +367,7 @@ export default function PlantPanel({
                               minHeight: '4px',
                               position: 'relative'
                             }}
-                            title={`${event.ml} ml on ${new Date(event.created_at).toLocaleDateString()}`}
+                            title={`${event.ml} ml on ${new Date(event.time).toLocaleDateString()}`}
                           />
                         );
                       })}

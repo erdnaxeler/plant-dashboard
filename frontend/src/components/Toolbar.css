@@ -97,3 +97,14 @@
   background: var(--accent);
   color: white;
 }
+
+.toolbar-tz {
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--border, #d4cfc4);
+  border-radius: 4px;
+  background: var(--bg-light, #fff);
+  color: var(--text, #333);
+  cursor: pointer;
+  max-width: 150px;
+}

@@ -42,12 +42,31 @@ export const ClustersAPI = {
     api.post(`/clusters/${publicId}/pairing-code`).then(res => res.data),
   unpair: (publicId) => 
     api.post(`/clusters/${publicId}/unpair`).then(res => res.data),
-  startWatering: (publicId) => 
+  startWatering: (publicId) =>
     api.post(`/clusters/${publicId}/start-watering`).then(res => res.data),
-  pauseWatering: (publicId) => 
+  pauseWatering: (publicId) =>
     api.post(`/clusters/${publicId}/pause-watering`).then(res => res.data),
-  setVolume: (publicId, mlVolumePct) => 
+  setVolume: (publicId, mlVolumePct) =>
     api.put(`/clusters/${publicId}/volume`, { ml_volume_pct: mlVolumePct }).then(res => res.data),
+  clearFault: (publicId) =>
+    api.post(`/clusters/${publicId}/clear-fault`).then(res => res.data),
+  togglePumpTest: (publicId) =>
+    api.post(`/clusters/${publicId}/toggle-pump-test`).then(res => res.data),
+  logManualWatering: (publicId) =>
+    api.post(`/clusters/${publicId}/log-manual-watering`).then(res => res.data),
+  // preferred_watering_hour_utc: integer 0-23, or null to clear
+  setPreferredHour: (publicId, hourUtc) =>
+    api.put(`/clusters/${publicId}/preferred-hour`, { preferred_watering_hour_utc: hourUtc }).then(res => res.data),
+  setTimezone: (publicId, timezone) =>
+    api.put(`/clusters/${publicId}/timezone`, { timezone }).then(res => res.data),
+  initializeSchedule: (publicId) =>
+    api.post(`/clusters/${publicId}/initialize-schedule`).then(res => res.data),
+};
+
+// Per-plant watering history (follows the plant across waterer changes)
+export const PlantHistoryAPI = {
+  getWaterings: (objectId, days) =>
+    api.get(`/plants/${objectId}/waterings`, { params: days ? { days } : {} }).then(res => res.data),
 };
 
 export const CatalogPlantsAPI = {

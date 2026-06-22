@@ -993,12 +993,6 @@ export default function MapEditor() {
     for (const other of allRooms) {
       if (other.id === room.id) continue;
 
-      // Deterministic tie-breaker: only the room with the higher id drops
-      // its border. Both rooms compute this from the same data so they
-      // always agree on which one renders the shared wall.
-      const thisDropsBorder = room.id > other.id;
-      if (!thisDropsBorder) continue;
-
       const oWidth = other.width || other.style?.width || 400;
       const oHeight = other.height || other.style?.height || 300;
       const oLeft = other.position.x;
@@ -1006,20 +1000,29 @@ export default function MapEditor() {
       const oTop = other.position.y;
       const oBottom = oTop + oHeight;
 
-      // Only drop a wall when the neighbour covers this edge *entirely*.
-      // A CSS border is all-or-nothing — dropping it for a neighbour that
-      // only overlaps part of the edge erases the non-shared portion too,
-      // leaving an open gap (e.g. a room flush against a shorter terrace).
-      // Requiring full span means a merge never produces a gap; partial
-      // adjacency just keeps both walls (a harmless double line).
-      const spansVertical = oTop <= top + TOUCH_TOLERANCE && oBottom >= bottom - TOUCH_TOLERANCE;
-      const spansHorizontal = oLeft <= left + TOUCH_TOLERANCE && oRight >= right - TOUCH_TOLERANCE;
+      // A CSS border is all-or-nothing, so we may only drop an edge when the
+      // neighbour backs it *entirely*. The room whose edge is fully spanned
+      // by the neighbour is the one that drops — its wall would be a
+      // redundant double line over the longer neighbour's wall. When both
+      // span each other (equal extent) the higher id drops, so exactly one
+      // of the pair renders the shared wall. The longer/containing room
+      // always keeps its wall, so it stays continuous past the shared part
+      // (this is why dragging one room longer no longer doubles the wall).
+      // Genuinely staggered overlaps (neither contains the other) still keep
+      // both walls — that case needs per-segment walls, not a border drop.
+      const spannedVert = oTop <= top + TOUCH_TOLERANCE && oBottom >= bottom - TOUCH_TOLERANCE;
+      const spansVert = top <= oTop + TOUCH_TOLERANCE && bottom >= oBottom - TOUCH_TOLERANCE;
+      const dropVert = spannedVert && (!spansVert || room.id > other.id);
 
-      if (spansVertical) {
+      const spannedHorz = oLeft <= left + TOUCH_TOLERANCE && oRight >= right - TOUCH_TOLERANCE;
+      const spansHorz = left <= oLeft + TOUCH_TOLERANCE && right >= oRight - TOUCH_TOLERANCE;
+      const dropHorz = spannedHorz && (!spansHorz || room.id > other.id);
+
+      if (dropVert) {
         if (Math.abs(left - oRight) < TOUCH_TOLERANCE) dropBorder.left = true;
         if (Math.abs(right - oLeft) < TOUCH_TOLERANCE) dropBorder.right = true;
       }
-      if (spansHorizontal) {
+      if (dropHorz) {
         if (Math.abs(top - oBottom) < TOUCH_TOLERANCE) dropBorder.top = true;
         if (Math.abs(bottom - oTop) < TOUCH_TOLERANCE) dropBorder.bottom = true;
       }

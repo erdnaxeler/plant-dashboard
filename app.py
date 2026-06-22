@@ -1644,8 +1644,8 @@ def api_map_objects_create():
     payload = request.get_json() or {}
     
     obj_type = payload.get("type", "").strip().lower()
-    if obj_type not in ["plant", "waterer", "room"]:
-        return jsonify({"error": "type must be 'plant', 'waterer', or 'room'"}), 400
+    if obj_type not in ["plant", "waterer", "room", "garden", "terrace", "furniture"]:
+        return jsonify({"error": "type must be 'plant', 'waterer', 'room', 'garden', 'terrace', or 'furniture'"}), 400
     
     name = (payload.get("name") or f"{obj_type.capitalize()}").strip()
     

@@ -14,6 +14,7 @@ import '@reactflow/node-resizer/dist/style.css';
 import PlantNode from './nodes/PlantNode';
 import WatererNode from './nodes/WatererNode';
 import RoomNode from './nodes/RoomNode';
+import BlockNode from './nodes/BlockNode';
 import Toolbar from './Toolbar';
 import LeftPanel from './LeftPanel';
 import PropertiesPanel from './PropertiesPanel';
@@ -24,7 +25,15 @@ const nodeTypes = {
   plant: PlantNode,
   waterer: WatererNode,
   room: RoomNode,
+  garden: BlockNode,
+  terrace: BlockNode,
+  furniture: BlockNode,
 };
+
+// Types that participate in apartment-level snapping and wall merging.
+// Furniture is deliberately not in this set — it's decoration, not
+// architecture, and shouldn't snap or merge walls.
+const STRUCTURAL_TYPES = new Set(['room', 'garden', 'terrace']);
 
 let nodeIdCounter = 1;
 
@@ -66,7 +75,7 @@ export default function MapEditor() {
   // change width/height (true during resize) or must only move x/y
   // (false during a plain drag, where size must never change).
   const snapRoomBoxToTouch = useCallback((roomId, box, { snapLeft, snapRight, snapTop, snapBottom, allowResize }) => {
-    const otherRooms = nodes.filter((n) => n.type === 'room' && n.id !== roomId);
+    const otherRooms = nodes.filter((n) => STRUCTURAL_TYPES.has(n.type) && n.id !== roomId);
 
     const { x, y, width, height } = box;
     const dLeft = x;
@@ -133,7 +142,13 @@ export default function MapEditor() {
       finalX = bestLeft.newX;
       snappedX = true;
     } else if (bestRight) {
-      if (allowResize) finalWidth = bestRight.newRight - x;
+      if (allowResize) {
+        // Resize case: keep left edge fixed, shrink/grow width to land right edge flush
+        finalWidth = bestRight.newRight - x;
+      } else {
+        // Drag case: shift the whole room so right edge lands flush
+        finalX = bestRight.newRight - width;
+      }
       snappedX = true;
     }
 
@@ -142,7 +157,11 @@ export default function MapEditor() {
       finalY = bestTop.newY;
       snappedY = true;
     } else if (bestBottom) {
-      if (allowResize) finalHeight = bestBottom.newBottom - y;
+      if (allowResize) {
+        finalHeight = bestBottom.newBottom - y;
+      } else {
+        finalY = bestBottom.newBottom - height;
+      }
       snappedY = true;
     }
 
@@ -156,7 +175,7 @@ export default function MapEditor() {
   // that the touch-snap pass above didn't already resolve, so the two
   // don't fight each other.
   const snapRoomBoxToAlign = useCallback((roomId, box, { skipX, skipY }) => {
-    const otherRooms = nodes.filter((n) => n.type === 'room' && n.id !== roomId);
+    const otherRooms = nodes.filter((n) => STRUCTURAL_TYPES.has(n.type) && n.id !== roomId);
     let { x, y, width, height } = box;
 
     if (!skipX) {
@@ -237,50 +256,18 @@ export default function MapEditor() {
       // in `data`; mode-driven interactivity (locked/draggable/etc.) is
       // applied separately in the `nodes` effect below, not here, so we
       // don't have to re-fetch on every mode switch.
-      const flowNodes = mapObjects.map(obj => {
-        if (obj.type === 'room') {
-          let doors = [];
-          let windows = [];
-          let width = 400;
-          let height = 300;
-
-          if (obj.metadata) {
-            try {
-              const metadata = typeof obj.metadata === 'string' ? JSON.parse(obj.metadata) : obj.metadata;
-              doors = metadata.doors || [];
-              windows = metadata.windows || [];
-              width = metadata.width || 400;
-              height = metadata.height || 300;
-            } catch (e) {
-              // Use defaults
-            }
-          }
-
-          return {
-            id: `node-${obj.id}`,
-            type: 'room',
-            position: { x: obj.map_x || 0, y: obj.map_y || 0 },
-            style: { width, height },
-            zIndex: -1, // always render beneath plant/waterer nodes
-            data: {
-              label: obj.name,
-              objectId: obj.id,
-              doors,
-              windows,
-            },
-          };
+      const parseMetadata = (raw) => {
+        if (!raw) return {};
+        try {
+          return typeof raw === 'string' ? JSON.parse(raw) : raw;
+        } catch (e) {
+          return {};
         }
+      };
 
-        return {
-          id: `node-${obj.id}`,
-          type: obj.type,
-          position: { x: obj.map_x || 0, y: obj.map_y || 0 },
-          data: {
-            label: obj.name,
-            objectId: obj.id,
-            clusterId: obj.cluster_id,
-          },
-        };
+      const flowNodes = mapObjects.map(obj => {
+        const metadata = parseMetadata(obj.metadata);
+        return buildNodeFromMapObject(obj, metadata);
       });
 
       // Convert Connections to React Flow edges
@@ -362,29 +349,49 @@ export default function MapEditor() {
     }
   }, [nodes]);
 
-  // Snapping is applied only at drag-END, not live during the drag. React
-  // Flow tracks drag position internally via its own mutable ref
-  // (dragItems.current) that's updated every mousemove BEFORE our
-  // onNodeDrag callback runs — so a live correction we apply via setNodes
-  // gets silently overwritten by React Flow's own tracking on the very
-  // next frame, since that ref has no idea we corrected anything. This
-  // produced exactly the inconsistent/"sometimes snaps" behavior we saw:
-  // it only stuck if you happened to release the mouse before another
-  // mousemove could stomp it. Snapping once at drag-end avoids the fight
-  // entirely — same approach already used for room resizing.
+  // Live during drag: apply snap on every mousemove so the room visibly
+  // "catches" against a neighbor as you slide it. Writes go to BOTH the
+  // RF internal store (so the current render reflects the snap without
+  // racing RF's own position updates) AND our React state (so the next
+  // render's nodes prop doesn't sync the unsnapped value back into the
+  // store and undo our correction).
+  const onNodeDrag = useCallback((event, node) => {
+    if (!STRUCTURAL_TYPES.has(node.type) || !reactFlowInstance) return;
+    const snapped = getRoomSnapPosition(node, node.position.x, node.position.y);
+    if (snapped.x !== node.position.x || snapped.y !== node.position.y) {
+      const update = (nds) => nds.map((n) =>
+        n.id === node.id ? { ...n, position: snapped } : n
+      );
+      reactFlowInstance.setNodes(update);
+      setNodes(update);
+    }
+  }, [getRoomSnapPosition, reactFlowInstance, setNodes]);
+
+  // Drag finished — apply one final snap pass (in case the live snap was
+  // overwritten by React Flow's internal tracking on the last frame),
+  // then persist to backend. Note: we write the correction via
+  // reactFlowInstance.setNodes (which targets RF's internal Zustand store
+  // directly) rather than useNodesState's setNodes. The latter lives in
+  // a separate React state that's synced to the store via onNodesChange
+  // — but during drag-end, RF's own updateNodePositions also writes a
+  // raw-mouse position into the store via the same path, racing our
+  // correction. Writing directly into the store avoids the race entirely
+  // since both writes target the same backing value.
   const onNodeDragStop = useCallback(async (event, node) => {
     try {
       let finalX = node.position.x;
       let finalY = node.position.y;
 
-      if (node.type === 'room') {
+      if (STRUCTURAL_TYPES.has(node.type) && reactFlowInstance) {
         const snapped = getRoomSnapPosition(node, node.position.x, node.position.y);
         finalX = snapped.x;
         finalY = snapped.y;
         if (finalX !== node.position.x || finalY !== node.position.y) {
-          setNodes((nds) => nds.map((n) =>
+          const update = (nds) => nds.map((n) =>
             n.id === node.id ? { ...n, position: { x: finalX, y: finalY } } : n
-          ));
+          );
+          reactFlowInstance.setNodes(update);
+          setNodes(update);
         }
       }
 
@@ -397,7 +404,7 @@ export default function MapEditor() {
       console.error('Failed to update position:', error);
       showToast('Failed to update position', true);
     }
-  }, [getRoomSnapPosition, setNodes]);
+  }, [getRoomSnapPosition, reactFlowInstance, setNodes]);
 
   // Fired instead of onNodeDragStop when a multi-node selection (made via
   // Shift+drag box-select) is dragged together — persist every node's
@@ -462,6 +469,56 @@ export default function MapEditor() {
     }
   }, []);
 
+  // Build a React Flow node from a backend MapObject, with the right
+  // shape for each type. Shared by loadMapData, handleAddNode, and onDrop
+  // so they can't drift apart.
+  const buildNodeFromMapObject = useCallback((obj, overrides = {}) => {
+    const base = {
+      id: `node-${obj.id}`,
+      type: obj.type,
+      position: { x: obj.map_x ?? 0, y: obj.map_y ?? 0 },
+    };
+
+    if (obj.type === 'room') {
+      return {
+        ...base,
+        style: { width: overrides.width ?? 400, height: overrides.height ?? 300 },
+        zIndex: -1,
+        data: {
+          label: obj.name,
+          objectId: obj.id,
+          doors: overrides.doors ?? [],
+          windows: overrides.windows ?? [],
+        },
+      };
+    }
+
+    if (obj.type === 'garden' || obj.type === 'terrace' || obj.type === 'furniture') {
+      const defaultDims = obj.type === 'furniture' ? { width: 120, height: 80 } : { width: 400, height: 300 };
+      return {
+        ...base,
+        style: { width: overrides.width ?? defaultDims.width, height: overrides.height ?? defaultDims.height },
+        zIndex: obj.type === 'furniture' ? 0 : -1,
+        data: {
+          label: obj.name,
+          objectId: obj.id,
+          blockType: obj.type,
+          rotation: overrides.rotation ?? 0,
+        },
+      };
+    }
+
+    // plant, waterer
+    return {
+      ...base,
+      data: {
+        label: obj.name,
+        objectId: obj.id,
+        clusterId: obj.cluster_id,
+      },
+    };
+  }, []);
+
   const handleAddNode = useCallback(async (type) => {
     if (!reactFlowInstance) return;
 
@@ -475,34 +532,13 @@ export default function MapEditor() {
         plant: 'Plant',
         waterer: 'Waterer',
         room: 'Room',
+        garden: 'Garden',
+        terrace: 'Terrace',
+        furniture: 'Furniture',
       };
       const name = `${typeNames[type] || 'Object'} ${nodeIdCounter}`;
       const mapObject = await MapObjectsAPI.create(type, name, position.x, position.y);
-
-      const newNode = type === 'room'
-        ? {
-            id: `node-${mapObject.id}`,
-            type: 'room',
-            position: { x: mapObject.map_x, y: mapObject.map_y },
-            style: { width: 400, height: 300 },
-            zIndex: -1,
-            data: {
-              label: mapObject.name,
-              objectId: mapObject.id,
-              doors: [],
-              windows: [],
-            },
-          }
-        : {
-            id: `node-${mapObject.id}`,
-            type: type,
-            position: { x: mapObject.map_x, y: mapObject.map_y },
-            data: {
-              label: mapObject.name,
-              objectId: mapObject.id,
-              clusterId: mapObject.cluster_id,
-            },
-          };
+      const newNode = buildNodeFromMapObject(mapObject);
       setNodes((nds) => nds.concat(newNode));
 
       nodeIdCounter++;
@@ -538,36 +574,13 @@ export default function MapEditor() {
           plant: 'Plant',
           waterer: 'Waterer',
           room: 'Room',
-          door: 'Door',
-          window: 'Window',
+          garden: 'Garden',
+          terrace: 'Terrace',
+          furniture: 'Furniture',
         };
         const name = `${typeNames[type] || 'Object'} ${nodeIdCounter}`;
         const mapObject = await MapObjectsAPI.create(type, name, position.x, position.y);
-
-        const newNode = type === 'room'
-          ? {
-              id: `node-${mapObject.id}`,
-              type: 'room',
-              position: { x: mapObject.map_x, y: mapObject.map_y },
-              style: { width: 400, height: 300 },
-              zIndex: -1,
-              data: {
-                label: mapObject.name,
-                objectId: mapObject.id,
-                doors: [],
-                windows: [],
-              },
-            }
-          : {
-              id: `node-${mapObject.id}`,
-              type: type,
-              position: { x: mapObject.map_x, y: mapObject.map_y },
-              data: {
-                label: mapObject.name,
-                objectId: mapObject.id,
-                clusterId: mapObject.cluster_id,
-              },
-            };
+        const newNode = buildNodeFromMapObject(mapObject);
 
         setNodes((nds) => nds.concat(newNode));
         nodeIdCounter++;
@@ -577,7 +590,7 @@ export default function MapEditor() {
         showToast('Failed to create object', true);
       }
     },
-    [reactFlowInstance, setNodes]
+    [reactFlowInstance, setNodes, buildNodeFromMapObject]
   );
 
   const handleDeleteNode = useCallback(async () => {
@@ -835,19 +848,112 @@ export default function MapEditor() {
     }
   }, [snapRoomBoxToTouch, setNodes, nodes]);
 
+  // Save garden/terrace/furniture metadata to backend (width/height/rotation).
+  const saveBlockMetadata = async (objectId, style, rotation) => {
+    try {
+      const metadata = {
+        width: style?.width,
+        height: style?.height,
+        rotation: rotation || 0,
+      };
+      await MapObjectsAPI.update(objectId, { metadata: JSON.stringify(metadata) });
+    } catch (error) {
+      console.error('Failed to save block metadata:', error);
+      showToast('Failed to save changes', true);
+    }
+  };
+
+  // Resize handler for garden/terrace blocks — same shape as room resize,
+  // including edge-snap, since these participate in structural snapping.
+  // Furniture doesn't use this (no resize for furniture).
+  const handleBlockResize = useCallback(async (nodeId, x, y, width, height, direction) => {
+    const dir = direction || [0, 0];
+    const snapped = snapRoomBoxToTouch(
+      nodeId,
+      { x, y, width, height },
+      {
+        snapLeft: dir[0] === -1,
+        snapRight: dir[0] === 1,
+        snapTop: dir[1] === -1,
+        snapBottom: dir[1] === 1,
+        allowResize: true,
+      }
+    );
+
+    setNodes((nds) => nds.map((node) => {
+      if (node.id === nodeId && STRUCTURAL_TYPES.has(node.type)) {
+        const updatedNode = {
+          ...node,
+          position: { x: snapped.x, y: snapped.y },
+          style: { ...node.style, width: snapped.width, height: snapped.height },
+        };
+        saveBlockMetadata(node.data.objectId, updatedNode.style, node.data.rotation);
+        return updatedNode;
+      }
+      return node;
+    }));
+
+    const node = nodes.find((n) => n.id === nodeId);
+    if (node) {
+      try {
+        await MapObjectsAPI.update(node.data.objectId, { x: snapped.x, y: snapped.y });
+      } catch (error) {
+        console.error('Failed to update block position after resize:', error);
+      }
+    }
+  }, [snapRoomBoxToTouch, setNodes, nodes]);
+
+  // Rotate handler for furniture — cycles 0 → 90 → 180 → 270 → 0.
+  const handleBlockRotate = useCallback((nodeId, newRotation) => {
+    setNodes((nds) => nds.map((node) => {
+      if (node.id === nodeId && node.type === 'furniture') {
+        const updatedNode = { ...node, data: { ...node.data, rotation: newRotation } };
+        saveBlockMetadata(node.data.objectId, node.style, newRotation);
+        return updatedNode;
+      }
+      return node;
+    }));
+  }, [setNodes]);
+
+  // Furniture resize: no snap, no merge — just persist the new dimensions
+  // and position. Used in place of handleBlockResize for furniture since
+  // furniture isn't part of the structural snap system.
+  const handleFurnitureResize = useCallback(async (nodeId, x, y, width, height) => {
+    setNodes((nds) => nds.map((node) => {
+      if (node.id === nodeId && node.type === 'furniture') {
+        const updatedNode = {
+          ...node,
+          position: { x, y },
+          style: { ...node.style, width, height },
+        };
+        saveBlockMetadata(node.data.objectId, updatedNode.style, node.data.rotation);
+        return updatedNode;
+      }
+      return node;
+    }));
+
+    const node = nodes.find((n) => n.id === nodeId);
+    if (node) {
+      try {
+        await MapObjectsAPI.update(node.data.objectId, { x, y });
+      } catch (error) {
+        console.error('Failed to update furniture position after resize:', error);
+      }
+    }
+  }, [setNodes, nodes]);
+
   // Inject mode-aware callbacks/flags into each node's data right before
   // render. This is the one place that decides what's interactive —
   // Given one room and the full list of rooms, determine which of its
-  // four edges are currently flush against another room's opposite edge
-  // (within a tight tolerance — tighter than SNAP_THRESHOLD, since this
-  // is "are they touching right now" not "should they snap together").
-  // Used purely for rendering: a touching edge gets no border, so two
-  // adjacent rooms read as one continuous wall instead of a double line.
-  // Recomputed fresh every render from current positions, so the instant
-  // you drag either room even slightly, the condition goes false and
-  // both edges get their borders back — "detaching" needs no explicit
-  // unlink step, it's just the natural result of no longer being flush.
-  const TOUCH_TOLERANCE = 2; // px — much tighter than SNAP_THRESHOLD; this is "touching", not "should snap toward touching"
+  // four edges are currently flush against another room's opposite edge.
+  // Returns true for an edge IF this room should drop its border there —
+  // that is, only the room with the *higher* id (lexicographically) drops
+  // its border on a touching pair. The other room keeps its border, so
+  // the visible wall is exactly one room's edge: continuous, same
+  // thickness as any unmerged wall, no double line and no ghost gap.
+  // Re-evaluated every render — drag either room even slightly and the
+  // condition flips back to false on both rooms, restoring both borders.
+  const TOUCH_TOLERANCE = 2; // px
 
   const getTouchingEdges = useCallback((room, allRooms) => {
     const width = room.width || room.style?.width || 400;
@@ -857,10 +963,17 @@ export default function MapEditor() {
     const top = room.position.y;
     const bottom = top + height;
 
-    const touching = { top: false, right: false, bottom: false, left: false };
+    const dropBorder = { top: false, right: false, bottom: false, left: false };
 
     for (const other of allRooms) {
       if (other.id === room.id) continue;
+
+      // Deterministic tie-breaker: only the room with the higher id drops
+      // its border. Both rooms compute this from the same data so they
+      // always agree on which one renders the shared wall.
+      const thisDropsBorder = room.id > other.id;
+      if (!thisDropsBorder) continue;
+
       const oWidth = other.width || other.style?.width || 400;
       const oHeight = other.height || other.style?.height || 300;
       const oLeft = other.position.x;
@@ -872,16 +985,16 @@ export default function MapEditor() {
       const horizontalOverlap = left < oRight && right > oLeft;
 
       if (verticalOverlap) {
-        if (Math.abs(left - oRight) < TOUCH_TOLERANCE) touching.left = true;
-        if (Math.abs(right - oLeft) < TOUCH_TOLERANCE) touching.right = true;
+        if (Math.abs(left - oRight) < TOUCH_TOLERANCE) dropBorder.left = true;
+        if (Math.abs(right - oLeft) < TOUCH_TOLERANCE) dropBorder.right = true;
       }
       if (horizontalOverlap) {
-        if (Math.abs(top - oBottom) < TOUCH_TOLERANCE) touching.top = true;
-        if (Math.abs(bottom - oTop) < TOUCH_TOLERANCE) touching.bottom = true;
+        if (Math.abs(top - oBottom) < TOUCH_TOLERANCE) dropBorder.top = true;
+        if (Math.abs(bottom - oTop) < TOUCH_TOLERANCE) dropBorder.bottom = true;
       }
     }
 
-    return touching;
+    return dropBorder;
   }, []);
 
   // RoomNode and the plant/waterer nodes themselves stay dumb.
@@ -894,7 +1007,7 @@ export default function MapEditor() {
         data: {
           ...node.data,
           locked: !isApartmentMode,
-          touchingEdges: getTouchingEdges(node, nodes.filter((n) => n.type === 'room')),
+          touchingEdges: getTouchingEdges(node, nodes.filter((n) => STRUCTURAL_TYPES.has(n.type))),
           onWallClick: isApartmentMode
             ? (wall, offset, screenX, screenY) => handleWallClick(node.id, wall, offset, screenX, screenY)
             : undefined,
@@ -910,6 +1023,46 @@ export default function MapEditor() {
         },
       };
     }
+
+    if (node.type === 'garden' || node.type === 'terrace') {
+      // Structural blocks: snap + wall-merge with rooms and each other,
+      // resizable, no doors/windows/rotation.
+      return {
+        ...node,
+        draggable: isApartmentMode,
+        selectable: isApartmentMode,
+        data: {
+          ...node.data,
+          locked: !isApartmentMode,
+          touchingEdges: getTouchingEdges(node, nodes.filter((n) => STRUCTURAL_TYPES.has(n.type))),
+          onResize: isApartmentMode
+            ? (x, y, width, height, direction) => handleBlockResize(node.id, x, y, width, height, direction)
+            : undefined,
+        },
+      };
+    }
+
+    if (node.type === 'furniture') {
+      // Decoration: freely placed inside rooms, no snap, no merge, 90°
+      // rotation via the in-node button. Visible in both modes since
+      // furniture is part of the apartment layout people set once.
+      return {
+        ...node,
+        draggable: isApartmentMode,
+        selectable: isApartmentMode,
+        data: {
+          ...node.data,
+          locked: !isApartmentMode,
+          onRotate: isApartmentMode
+            ? (newRotation) => handleBlockRotate(node.id, newRotation)
+            : undefined,
+          onResize: isApartmentMode
+            ? (x, y, width, height) => handleFurnitureResize(node.id, x, y, width, height)
+            : undefined,
+        },
+      };
+    }
+
     // Plant/waterer nodes: hidden entirely while editing the apartment,
     // so the apartment tab really does show "only apartment stuff".
     return {
@@ -948,6 +1101,7 @@ export default function MapEditor() {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={isApartmentMode ? undefined : onConnect}
+          onNodeDrag={isApartmentMode ? onNodeDrag : undefined}
           onNodeDragStop={onNodeDragStop}
           onSelectionDragStop={onSelectionDragStop}
           onNodesDelete={isApartmentMode ? undefined : onNodesDelete}
@@ -959,6 +1113,11 @@ export default function MapEditor() {
           onPaneClick={closeOpeningPopup}
           nodeTypes={nodeTypes}
           nodesConnectable={!isApartmentMode}
+          // In apartment mode, don't let a selected node jump to the top of
+          // the stack — otherwise selecting a room lifts it (zIndex -1) above
+          // the furniture sitting inside it (zIndex 0). Keeping this off
+          // preserves the room-below-furniture order while selected.
+          elevateNodesOnSelect={!isApartmentMode}
           fitView
           defaultEdgeOptions={{
             type: 'smoothstep',

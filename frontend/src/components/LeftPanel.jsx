@@ -41,22 +41,60 @@ export default function LeftPanel({ onAddNode, apartmentMode }) {
           )}
 
           {apartmentMode && (
-            <div
-              className="tool-item room-tool"
-              draggable
-              onDragStart={(e) => onDragStart(e, 'room')}
-              onClick={() => onAddNode('room')}
-            >
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="4" y="4" width="16" height="16" rx="1" />
-              </svg>
-              <span>Room</span>
-            </div>
+            <>
+              <div
+                className="tool-item room-tool"
+                draggable
+                onDragStart={(e) => onDragStart(e, 'room')}
+                onClick={() => onAddNode('room')}
+              >
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="4" y="4" width="16" height="16" rx="1" />
+                </svg>
+                <span>Room</span>
+              </div>
+
+              <div
+                className="tool-item garden-tool"
+                draggable
+                onDragStart={(e) => onDragStart(e, 'garden')}
+                onClick={() => onAddNode('garden')}
+              >
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="#5a8c5a" stroke="#5a8c5a" strokeWidth="1.5">
+                  <rect x="4" y="4" width="16" height="16" rx="1" fill="#c8e0c5" />
+                </svg>
+                <span>Garden</span>
+              </div>
+
+              <div
+                className="tool-item terrace-tool"
+                draggable
+                onDragStart={(e) => onDragStart(e, 'terrace')}
+                onClick={() => onAddNode('terrace')}
+              >
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="#6b6b6b" stroke="#2f2f2f" strokeWidth="1.5">
+                  <rect x="4" y="4" width="16" height="16" rx="1" />
+                </svg>
+                <span>Terrace</span>
+              </div>
+
+              <div
+                className="tool-item furniture-tool"
+                draggable
+                onDragStart={(e) => onDragStart(e, 'furniture')}
+                onClick={() => onAddNode('furniture')}
+              >
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="#c69a6b" stroke="#7c5436" strokeWidth="1.5">
+                  <rect x="4" y="7" width="16" height="10" rx="1" />
+                </svg>
+                <span>Furniture</span>
+              </div>
+            </>
           )}
         </div>
         <div className="panel-hint">
           {apartmentMode
-            ? 'Drag onto canvas or click to add a room'
+            ? 'Drag onto canvas or click to add'
             : 'Drag onto canvas or click to add'}
         </div>
       </div>

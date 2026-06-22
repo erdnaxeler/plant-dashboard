@@ -809,6 +809,21 @@ export default function MapEditor() {
     showToast(newMode === 'apartment' ? 'Editing apartment layout' : 'Apartment locked');
   }, []);
 
+  // One home-wide timezone, surfaced at the top. Stored per device on the
+  // backend (it drives the local<->UTC preferred-hour conversion and the
+  // same-day watering dedup), so changing it writes through to every device.
+  const appTimezone = clusters[0]?.timezone || 'UTC';
+  const handleSetAppTimezone = useCallback(async (tz) => {
+    try {
+      await Promise.all(clusters.map((c) => ClustersAPI.setTimezone(c.public_id, tz)));
+      const fresh = await ClustersAPI.getAll();
+      setClusters(fresh);
+      showToast(`Timezone set to ${tz}`);
+    } catch (error) {
+      showToast('Failed to set timezone', true);
+    }
+  }, [clusters]);
+
   // Save garden/terrace/furniture metadata to backend (width/height/rotation).
   const saveBlockMetadata = async (objectId, style, rotation) => {
     try {
@@ -1104,12 +1119,14 @@ export default function MapEditor() {
 
   return (
     <div className="map-editor">
-      <Toolbar 
+      <Toolbar
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
         onFitView={handleFitView}
         mode={mode}
         onSetMode={handleSetMode}
+        timezone={appTimezone}
+        onSetTimezone={handleSetAppTimezone}
       />
       <LeftPanel 
         onAddNode={handleAddNode}

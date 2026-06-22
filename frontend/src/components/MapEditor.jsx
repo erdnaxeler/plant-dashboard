@@ -981,14 +981,20 @@ export default function MapEditor() {
       const oTop = other.position.y;
       const oBottom = oTop + oHeight;
 
-      const verticalOverlap = top < oBottom && bottom > oTop;
-      const horizontalOverlap = left < oRight && right > oLeft;
+      // Only drop a wall when the neighbour covers this edge *entirely*.
+      // A CSS border is all-or-nothing — dropping it for a neighbour that
+      // only overlaps part of the edge erases the non-shared portion too,
+      // leaving an open gap (e.g. a room flush against a shorter terrace).
+      // Requiring full span means a merge never produces a gap; partial
+      // adjacency just keeps both walls (a harmless double line).
+      const spansVertical = oTop <= top + TOUCH_TOLERANCE && oBottom >= bottom - TOUCH_TOLERANCE;
+      const spansHorizontal = oLeft <= left + TOUCH_TOLERANCE && oRight >= right - TOUCH_TOLERANCE;
 
-      if (verticalOverlap) {
+      if (spansVertical) {
         if (Math.abs(left - oRight) < TOUCH_TOLERANCE) dropBorder.left = true;
         if (Math.abs(right - oLeft) < TOUCH_TOLERANCE) dropBorder.right = true;
       }
-      if (horizontalOverlap) {
+      if (spansHorizontal) {
         if (Math.abs(top - oBottom) < TOUCH_TOLERANCE) dropBorder.top = true;
         if (Math.abs(bottom - oTop) < TOUCH_TOLERANCE) dropBorder.bottom = true;
       }

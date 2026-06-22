@@ -174,6 +174,10 @@ class Cluster(db.Model):
 class WateringLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     cluster_ref = db.Column(db.Integer, db.ForeignKey("cluster.id"), index=True)
+    # Which plant node received this watering. Set per-plant so history follows
+    # the plant across waterer changes. Null for device-level rows (no plants
+    # connected) and legacy rows logged before per-plant attribution existed.
+    plant_ref = db.Column(db.Integer, db.ForeignKey("map_object.id"), nullable=True, index=True)
     ml = db.Column(db.Float, nullable=False)
     created_at = db.Column(
         db.DateTime(timezone=True),
@@ -279,7 +283,18 @@ def _migrate_cluster_columns():
                 else:
                     db.session.execute(text("ALTER TABLE map_object ADD COLUMN waterer_schedule VARCHAR(32)"))
                 db.session.commit()
-        
+
+        # Migrate WateringLog: per-plant attribution so history follows the plant.
+        if "watering_log" in insp.get_table_names():
+            dialect = db.engine.dialect.name
+            wl_cols = {c["name"] for c in insp.get_columns("watering_log")}
+            if "plant_ref" not in wl_cols:
+                if dialect == "postgresql":
+                    db.session.execute(text("ALTER TABLE watering_log ADD COLUMN IF NOT EXISTS plant_ref INTEGER"))
+                else:
+                    db.session.execute(text("ALTER TABLE watering_log ADD COLUMN plant_ref INTEGER"))
+                db.session.commit()
+
         # Migrate Cluster columns
         if "cluster" not in insp.get_table_names():
             return
@@ -533,6 +548,18 @@ def _ml_per_event(cluster: Cluster) -> float:
     if n <= 0:
         return 0.0
     return round(_effective_ml_per_week(cluster) / n, 2)
+
+
+def _log_watering(cluster: Cluster, ml: float, when: datetime) -> None:
+    """Record a watering event. One row per connected plant (so each plant's
+    history follows it across waterer changes); a single device-level row
+    (plant_ref null) when no plants are attached."""
+    plants = MapObject.query.filter_by(cluster_id=cluster.id, type="plant").all()
+    if plants:
+        for p in plants:
+            db.session.add(WateringLog(cluster_ref=cluster.id, plant_ref=p.id, ml=ml, created_at=when))
+    else:
+        db.session.add(WateringLog(cluster_ref=cluster.id, ml=ml, created_at=when))
 
 
 def _interval_for_group(group: str) -> timedelta:
@@ -1001,7 +1028,7 @@ def device_timer_complete():
     cluster.next_watering_at = _calculate_next_watering_time(cluster, now)
 
     if ml > 0:
-        db.session.add(WateringLog(cluster_ref=cluster.id, ml=ml, created_at=now))
+        _log_watering(cluster, ml, now)
 
     db.session.commit()
     return jsonify({
@@ -1041,6 +1068,22 @@ def cluster_waterings_chart(public_id):
         return jsonify({"error": "not found"}), 404
 
     q = WateringLog.query.filter_by(cluster_ref=c.id)
+    days = request.args.get("days", type=int)
+    if days and days > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        q = q.filter(WateringLog.created_at >= cutoff)
+    rows = q.order_by(WateringLog.created_at.asc()).all()
+    return jsonify([{"time": r.created_at.isoformat(), "ml": r.ml} for r in rows])
+
+
+@app.route("/api/app/plants/<int:object_id>/waterings")
+def plant_waterings_chart(object_id):
+    """Watering history for a single plant node, keyed by plant_ref so it
+    follows the plant across waterer changes. Same shape as the cluster chart."""
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    q = WateringLog.query.filter_by(plant_ref=object_id)
     days = request.args.get("days", type=int)
     if days and days > 0:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
@@ -1326,7 +1369,7 @@ def api_cluster_log_manual_watering(public_id):
         return jsonify({"error": "no watering amount configured"}), 400
 
     now = _utc_now()
-    db.session.add(WateringLog(cluster_ref=c.id, ml=ml, created_at=now))
+    _log_watering(c, ml, now)
     c.last_watering_at = now
     c.last_watering_ml = ml
     c.next_watering_at = _calculate_next_watering_time(c, now, skip_interval=True)
@@ -1688,13 +1731,15 @@ def _update_cluster_from_connections(waterer_id: int) -> Optional[str]:
         db.session.flush()
         waterer.cluster_id = cluster.id
 
-    # Detach every plant currently on this device, then re-attach the ones
-    # that are actually connected now. A plant that was disconnected falls off
-    # cleanly; the device record itself is untouched.
-    MapObject.query.filter(
-        MapObject.cluster_id == cluster.id,
-        MapObject.type == "plant",
-    ).update({MapObject.cluster_id: None}, synchronize_session=False)
+    # Re-sync attached plants using ORM objects. (A bulk UPDATE to clear then
+    # re-set cluster_id desyncs the session: re-setting an already-attached
+    # plant to its stale value is a no-op to the dirty-check, so the cleared
+    # row never gets restored and the plant silently falls off.) Detach only
+    # the plants on this device that are no longer connected.
+    connected_ids = {p.id for p in plants}
+    for existing in MapObject.query.filter_by(cluster_id=cluster.id, type="plant").all():
+        if existing.id not in connected_ids:
+            existing.cluster_id = None
 
     # More than 3 plants is already rejected at connection time; if it ever
     # happens, leave the device alone and just don't over-attach.

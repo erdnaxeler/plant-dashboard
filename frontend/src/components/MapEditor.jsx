@@ -15,6 +15,7 @@ import PlantNode from './nodes/PlantNode';
 import WatererNode from './nodes/WatererNode';
 import RoomNode from './nodes/RoomNode';
 import BlockNode from './nodes/BlockNode';
+import { edgesMoved } from './nodes/resizeUtils';
 import Toolbar from './Toolbar';
 import LeftPanel from './LeftPanel';
 import PropertiesPanel from './PropertiesPanel';
@@ -808,46 +809,6 @@ export default function MapEditor() {
     showToast(newMode === 'apartment' ? 'Editing apartment layout' : 'Apartment locked');
   }, []);
 
-  // Persist a room resize (called from RoomNode's NodeResizer onResizeEnd).
-  // Snaps the edge(s) that moved against any neighboring room before saving.
-  const handleRoomResize = useCallback(async (nodeId, x, y, width, height, direction) => {
-    const dir = direction || [0, 0];
-    const snapped = snapRoomBoxToTouch(
-      nodeId,
-      { x, y, width, height },
-      {
-        snapLeft: dir[0] === -1,
-        snapRight: dir[0] === 1,
-        snapTop: dir[1] === -1,
-        snapBottom: dir[1] === 1,
-        allowResize: true,
-      }
-    );
-
-    setNodes((nds) => nds.map((node) => {
-      if (node.id === nodeId && node.type === 'room') {
-        const updatedNode = {
-          ...node,
-          position: { x: snapped.x, y: snapped.y },
-          style: { ...node.style, width: snapped.width, height: snapped.height },
-        };
-        saveRoomMetadata(node.data.objectId, node.data, updatedNode.style);
-        return updatedNode;
-      }
-      return node;
-    }));
-
-    // Position isn't part of metadata — it's map_x/map_y on the object itself
-    const node = nodes.find((n) => n.id === nodeId);
-    if (node) {
-      try {
-        await MapObjectsAPI.update(node.data.objectId, { x: snapped.x, y: snapped.y });
-      } catch (error) {
-        console.error('Failed to update room position after resize:', error);
-      }
-    }
-  }, [snapRoomBoxToTouch, setNodes, nodes]);
-
   // Save garden/terrace/furniture metadata to backend (width/height/rotation).
   const saveBlockMetadata = async (objectId, style, rotation) => {
     try {
@@ -863,46 +824,6 @@ export default function MapEditor() {
     }
   };
 
-  // Resize handler for garden/terrace blocks — same shape as room resize,
-  // including edge-snap, since these participate in structural snapping.
-  // Furniture doesn't use this (no resize for furniture).
-  const handleBlockResize = useCallback(async (nodeId, x, y, width, height, direction) => {
-    const dir = direction || [0, 0];
-    const snapped = snapRoomBoxToTouch(
-      nodeId,
-      { x, y, width, height },
-      {
-        snapLeft: dir[0] === -1,
-        snapRight: dir[0] === 1,
-        snapTop: dir[1] === -1,
-        snapBottom: dir[1] === 1,
-        allowResize: true,
-      }
-    );
-
-    setNodes((nds) => nds.map((node) => {
-      if (node.id === nodeId && STRUCTURAL_TYPES.has(node.type)) {
-        const updatedNode = {
-          ...node,
-          position: { x: snapped.x, y: snapped.y },
-          style: { ...node.style, width: snapped.width, height: snapped.height },
-        };
-        saveBlockMetadata(node.data.objectId, updatedNode.style, node.data.rotation);
-        return updatedNode;
-      }
-      return node;
-    }));
-
-    const node = nodes.find((n) => n.id === nodeId);
-    if (node) {
-      try {
-        await MapObjectsAPI.update(node.data.objectId, { x: snapped.x, y: snapped.y });
-      } catch (error) {
-        console.error('Failed to update block position after resize:', error);
-      }
-    }
-  }, [snapRoomBoxToTouch, setNodes, nodes]);
-
   // Rotate handler for furniture — cycles 0 → 90 → 180 → 270 → 0.
   const handleBlockRotate = useCallback((nodeId, newRotation) => {
     setNodes((nds) => nds.map((node) => {
@@ -915,32 +836,136 @@ export default function MapEditor() {
     }));
   }, [setNodes]);
 
-  // Furniture resize: no snap, no merge — just persist the new dimensions
-  // and position. Used in place of handleBlockResize for furniture since
-  // furniture isn't part of the structural snap system.
-  const handleFurnitureResize = useCallback(async (nodeId, x, y, width, height) => {
-    setNodes((nds) => nds.map((node) => {
-      if (node.id === nodeId && node.type === 'furniture') {
-        const updatedNode = {
-          ...node,
-          position: { x, y },
-          style: { ...node.style, width, height },
-        };
-        saveBlockMetadata(node.data.objectId, updatedNode.style, node.data.rotation);
-        return updatedNode;
-      }
-      return node;
-    }));
+  // ---- Resize snapping --------------------------------------------------
+  // Resizing a wall snaps exactly like dragging a whole room: touch-snap
+  // (flush against a neighbour's wall) plus alignment-snap (edges line up),
+  // applied live while the handle is dragged. We do it by intercepting React
+  // Flow's resize changes in handleNodesChange and rewriting the moving
+  // edge(s) to the snapped value, so the snapped geometry is what actually
+  // gets committed — no separate on-release pass that could disagree.
 
-    const node = nodes.find((n) => n.id === nodeId);
-    if (node) {
-      try {
-        await MapObjectsAPI.update(node.data.objectId, { x, y });
-      } catch (error) {
-        console.error('Failed to update furniture position after resize:', error);
+  const MIN_RESIZE_DIM = 40; // floor so an alignment snap can't invert a box
+
+  // Snap a resize box. Only the moved edge(s) snap; the opposite edge stays
+  // pinned (allowResize). Touch first, then alignment on any axis the touch
+  // pass didn't already resolve — same two-pass order as getRoomSnapPosition.
+  const getRoomResizeSnap = useCallback((nodeId, box, [dx, dy]) => {
+    const touch = snapRoomBoxToTouch(nodeId, box, {
+      snapLeft: dx === -1,
+      snapRight: dx === 1,
+      snapTop: dy === -1,
+      snapBottom: dy === 1,
+      allowResize: true,
+    });
+    let { x, y, width, height } = touch;
+    const others = nodes.filter((n) => STRUCTURAL_TYPES.has(n.type) && n.id !== nodeId);
+
+    if (dx !== 0 && !touch.snappedX) {
+      const edge = dx === 1 ? x + width : x; // the moving vertical edge
+      let best = null;
+      for (const r of others) {
+        const rLeft = r.position.x;
+        const rRight = rLeft + (r.width || r.style?.width || 400);
+        for (const v of [rLeft, rRight]) {
+          const d = Math.abs(edge - v);
+          if (d < SNAP_THRESHOLD && (!best || d < best.d)) best = { v, d };
+        }
+      }
+      if (best) {
+        if (dx === 1) width = Math.max(MIN_RESIZE_DIM, best.v - x);
+        else { const right = x + width; x = Math.min(best.v, right - MIN_RESIZE_DIM); width = right - x; }
       }
     }
-  }, [setNodes, nodes]);
+
+    if (dy !== 0 && !touch.snappedY) {
+      const edge = dy === 1 ? y + height : y; // the moving horizontal edge
+      let best = null;
+      for (const r of others) {
+        const rTop = r.position.y;
+        const rBottom = rTop + (r.height || r.style?.height || 300);
+        for (const v of [rTop, rBottom]) {
+          const d = Math.abs(edge - v);
+          if (d < SNAP_THRESHOLD && (!best || d < best.d)) best = { v, d };
+        }
+      }
+      if (best) {
+        if (dy === 1) height = Math.max(MIN_RESIZE_DIM, best.v - y);
+        else { const bottom = y + height; y = Math.min(best.v, bottom - MIN_RESIZE_DIM); height = bottom - y; }
+      }
+    }
+
+    return { x, y, width, height };
+  }, [snapRoomBoxToTouch, nodes]);
+
+  // Active resize, so handleNodesChange knows to snap incoming dimension
+  // changes and against which start box. type === 'furniture' is left
+  // un-snapped (decoration, not architecture).
+  const activeResize = useRef(null); // { nodeId, type, startBox } | null
+
+  const handleResizeStart = useCallback((nodeId, type) => {
+    const node = reactFlowInstance?.getNode(nodeId);
+    if (!node) return;
+    activeResize.current = {
+      nodeId,
+      type,
+      startBox: {
+        x: node.position.x,
+        y: node.position.y,
+        width: node.width || node.style?.width || 400,
+        height: node.height || node.style?.height || 300,
+      },
+    };
+  }, [reactFlowInstance]);
+
+  // Resize finished: live snapping already left the node at its final
+  // snapped geometry, so just persist it. The no-op setNodes updater is how
+  // we read the latest committed node (not a stale closure).
+  const handleResizeEnd = useCallback((nodeId) => {
+    activeResize.current = null;
+    setNodes((nds) => {
+      const node = nds.find((n) => n.id === nodeId);
+      if (node) {
+        if (node.type === 'room') {
+          saveRoomMetadata(node.data.objectId, node.data, node.style);
+        } else {
+          saveBlockMetadata(node.data.objectId, node.style, node.data.rotation);
+        }
+        MapObjectsAPI.update(node.data.objectId, { x: node.position.x, y: node.position.y })
+          .catch((error) => console.error('Failed to update position after resize:', error));
+      }
+      return nds;
+    });
+  }, [setNodes]);
+
+  // Wraps useNodesState's onNodesChange. While a (non-furniture) resize is
+  // active, React Flow's live dimension/position changes for that node get
+  // run through the snap and rewritten in place, so what lands in state is
+  // already snapped — this is what makes resize snapping live.
+  const handleNodesChange = useCallback((changes) => {
+    const ra = activeResize.current;
+    if (ra && ra.type !== 'furniture') {
+      const dimChange = changes.find((c) => c.id === ra.nodeId && c.type === 'dimensions' && c.dimensions);
+      if (dimChange) {
+        const posChange = changes.find((c) => c.id === ra.nodeId && c.type === 'position' && c.position);
+        const node = reactFlowInstance?.getNode(ra.nodeId);
+        const baseX = posChange ? posChange.position.x : (node ? node.position.x : ra.startBox.x);
+        const baseY = posChange ? posChange.position.y : (node ? node.position.y : ra.startBox.y);
+        const box = { x: baseX, y: baseY, width: dimChange.dimensions.width, height: dimChange.dimensions.height };
+        const snapped = getRoomResizeSnap(ra.nodeId, box, edgesMoved(ra.startBox, box));
+        dimChange.dimensions.width = snapped.width;
+        dimChange.dimensions.height = snapped.height;
+        if (snapped.x !== baseX || snapped.y !== baseY) {
+          if (posChange) {
+            posChange.position.x = snapped.x;
+            posChange.position.y = snapped.y;
+          } else {
+            changes.push({ id: ra.nodeId, type: 'position', position: { x: snapped.x, y: snapped.y } });
+          }
+        }
+      }
+    }
+    onNodesChange(changes);
+  }, [onNodesChange, getRoomResizeSnap, reactFlowInstance]);
 
   // Inject mode-aware callbacks/flags into each node's data right before
   // render. This is the one place that decides what's interactive —
@@ -1023,9 +1048,8 @@ export default function MapEditor() {
           onOpeningMove: isApartmentMode
             ? (type, id, newOffset) => handleOpeningMove(node.id, type, id, newOffset)
             : undefined,
-          onResize: isApartmentMode
-            ? (x, y, width, height, direction) => handleRoomResize(node.id, x, y, width, height, direction)
-            : undefined,
+          onResizeStart: isApartmentMode ? () => handleResizeStart(node.id, 'room') : undefined,
+          onResizeEnd: isApartmentMode ? () => handleResizeEnd(node.id) : undefined,
         },
       };
     }
@@ -1041,9 +1065,8 @@ export default function MapEditor() {
           ...node.data,
           locked: !isApartmentMode,
           touchingEdges: getTouchingEdges(node, nodes.filter((n) => STRUCTURAL_TYPES.has(n.type))),
-          onResize: isApartmentMode
-            ? (x, y, width, height, direction) => handleBlockResize(node.id, x, y, width, height, direction)
-            : undefined,
+          onResizeStart: isApartmentMode ? () => handleResizeStart(node.id, node.type) : undefined,
+          onResizeEnd: isApartmentMode ? () => handleResizeEnd(node.id) : undefined,
         },
       };
     }
@@ -1062,9 +1085,8 @@ export default function MapEditor() {
           onRotate: isApartmentMode
             ? (newRotation) => handleBlockRotate(node.id, newRotation)
             : undefined,
-          onResize: isApartmentMode
-            ? (x, y, width, height) => handleFurnitureResize(node.id, x, y, width, height)
-            : undefined,
+          onResizeStart: isApartmentMode ? () => handleResizeStart(node.id, 'furniture') : undefined,
+          onResizeEnd: isApartmentMode ? () => handleResizeEnd(node.id) : undefined,
         },
       };
     }
@@ -1104,7 +1126,7 @@ export default function MapEditor() {
         <ReactFlow
           nodes={displayNodes}
           edges={isApartmentMode ? [] : edges}
-          onNodesChange={onNodesChange}
+          onNodesChange={handleNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={isApartmentMode ? undefined : onConnect}
           onNodeDrag={isApartmentMode ? onNodeDrag : undefined}

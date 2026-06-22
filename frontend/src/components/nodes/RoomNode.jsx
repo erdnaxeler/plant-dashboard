@@ -1,7 +1,6 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
 import { Handle, Position, NodeResizer, useReactFlow } from 'reactflow';
 import './NodeStyles.css';
-import { edgesMoved } from './resizeUtils';
 
 const OPENING_SIZE = 40; // keep in sync with offset math in MapEditor.jsx
 
@@ -10,12 +9,6 @@ export default function RoomNode({ data, selected }) {
   const windows = data.windows || [];
   const locked = !!data.locked;
   const roomRef = useRef(null);
-  // The box at the moment a resize starts. We derive which edge(s) moved by
-  // comparing this against the final box on resize end — node-resizer's own
-  // `direction` is computed from the last mousemove delta (grow/shrink) and
-  // drops to 0 on an axis if the final tick didn't move it, which made
-  // corner/edge snapping miss. Start-vs-end geometry is deterministic.
-  const resizeStartBox = useRef(null);
   const { screenToFlowPosition } = useReactFlow();
 
   // While dragging a door/window we track a live offset locally so the
@@ -149,14 +142,8 @@ export default function RoomNode({ data, selected }) {
           minWidth={120}
           minHeight={100}
           isVisible={selected}
-          onResizeStart={(_, params) => {
-            resizeStartBox.current = { x: params.x, y: params.y, width: params.width, height: params.height };
-          }}
-          onResizeEnd={(_, params) => {
-            if (data.onResize) {
-              data.onResize(params.x, params.y, params.width, params.height, edgesMoved(resizeStartBox.current, params));
-            }
-          }}
+          onResizeStart={() => data.onResizeStart?.()}
+          onResizeEnd={() => data.onResizeEnd?.()}
         />
       )}
 

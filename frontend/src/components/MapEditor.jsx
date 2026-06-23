@@ -428,12 +428,15 @@ export default function MapEditor() {
 
   const onNodesDelete = useCallback(async (deletedNodes) => {
     try {
+      const deletedIds = new Set(deletedNodes.map((n) => n.id));
       for (const node of deletedNodes) {
         const objectId = node.data.objectId;
         await MapObjectsAPI.delete(objectId);
       }
+      // Drop edges touching any deleted node so plants don't stay tied to a ghost.
+      setEdges((eds) => eds.filter((e) => !deletedIds.has(e.source) && !deletedIds.has(e.target)));
       showToast('Object deleted');
-      
+
       // Reload clusters
       const clustersData = await ClustersAPI.getAll();
       setClusters(clustersData);
@@ -600,8 +603,12 @@ export default function MapEditor() {
     try {
       const objectId = selectedNode.data.objectId;
       await MapObjectsAPI.delete(objectId);
-      
+
       setNodes((nds) => nds.filter((n) => n.id !== selectedNode.id));
+      // Drop any edges touching the deleted node — otherwise they dangle and
+      // the formerly-connected plants stay "connected" to a ghost (can't
+      // reconnect until a reload). The backend already removed the rows.
+      setEdges((eds) => eds.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id));
       setSelectedNode(null);
       showToast('Object deleted');
       
@@ -644,6 +651,18 @@ export default function MapEditor() {
       console.error('Failed to refresh node:', error);
     }
   }, [setNodes]);
+
+  // Refresh only the cluster data (not the map), so in-panel device controls
+  // (volume, preferred time, pump test, etc.) update the panel without the
+  // full reload that would deselect the node and close the panel.
+  const handleClusterRefresh = useCallback(async () => {
+    try {
+      const clustersData = await ClustersAPI.getAll();
+      setClusters(clustersData);
+    } catch (error) {
+      console.error('Failed to refresh clusters:', error);
+    }
+  }, []);
 
   const getNodeCluster = useCallback(() => {
     if (!selectedNode) return null;
@@ -1157,6 +1176,7 @@ export default function MapEditor() {
           onDelete={handleDeleteNode}
           cluster={getNodeCluster()}
           onClusterUpdate={handleClusterUpdate}
+          onClusterRefresh={handleClusterRefresh}
           onNodeRefresh={handleNodeRefresh}
         />
       )}

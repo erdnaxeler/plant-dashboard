@@ -9,6 +9,7 @@ export default function PropertiesPanel({
   onDelete,
   cluster,
   onClusterUpdate,
+  onClusterRefresh,
   onNodeRefresh
 }) {
 
@@ -34,6 +35,8 @@ export default function PropertiesPanel({
         connectedPlants={connectedPlants || []}
         cluster={cluster}
         onUpdate={onClusterUpdate}
+        onClusterRefresh={onClusterRefresh}
+        onNodeRefresh={onNodeRefresh}
         onDelete={onDelete}
       />
     );

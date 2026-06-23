@@ -10,13 +10,18 @@ const POT_SIZES = {
   '12x11': '12" × 11"'
 };
 
-export default function WatererPanel({ 
-  watererNode, 
+export default function WatererPanel({
+  watererNode,
   connectedPlants,
   cluster,
   onUpdate,
-  onDelete 
+  onClusterRefresh,
+  onNodeRefresh,
+  onDelete
 }) {
+  // Device controls update cluster state shown in this panel; refresh just the
+  // cluster (not the whole map) so the panel doesn't deselect and close.
+  const refresh = onClusterRefresh || onUpdate;
   const [catalogPlants, setCatalogPlants] = useState([]);
   const [clusterName, setClusterName] = useState('');
   const [potSize, setPotSize] = useState('');
@@ -96,7 +101,7 @@ export default function WatererPanel({
 
     try {
       await ClustersAPI.calibrate(cluster.public_id, potSize, selectedPlantIds);
-      onUpdate();
+      refresh();
     } catch (error) {
       console.error('Failed to calibrate cluster:', error);
       alert(error.response?.data?.error || 'Failed to calibrate cluster');
@@ -125,7 +130,7 @@ export default function WatererPanel({
 
     try {
       await ClustersAPI.unpair(cluster.public_id);
-      onUpdate();
+      refresh();
     } catch (error) {
       console.error('Failed to unpair:', error);
       alert('Failed to unpair device');
@@ -137,7 +142,7 @@ export default function WatererPanel({
 
     try {
       await ClustersAPI.startWatering(cluster.public_id);
-      onUpdate();
+      refresh();
     } catch (error) {
       console.error('Failed to start watering:', error);
       alert('Failed to start watering');
@@ -149,7 +154,7 @@ export default function WatererPanel({
 
     try {
       await ClustersAPI.pauseWatering(cluster.public_id);
-      onUpdate();
+      refresh();
     } catch (error) {
       console.error('Failed to pause watering:', error);
       alert('Failed to pause watering');
@@ -163,7 +168,7 @@ export default function WatererPanel({
 
     try {
       await ClustersAPI.setVolume(cluster.public_id, newPct);
-      onUpdate();
+      refresh();
     } catch (error) {
       console.error('Failed to update volume:', error);
       alert('Failed to update volume');
@@ -174,7 +179,7 @@ export default function WatererPanel({
     if (!cluster) return;
     try {
       await ClustersAPI.clearFault(cluster.public_id);
-      onUpdate();
+      refresh();
     } catch (error) {
       alert(error.response?.data?.error || 'Failed to clear fault');
     }
@@ -184,7 +189,7 @@ export default function WatererPanel({
     if (!cluster) return;
     try {
       await ClustersAPI.togglePumpTest(cluster.public_id);
-      onUpdate();
+      refresh();
     } catch (error) {
       alert(error.response?.data?.error || 'Pump test toggle failed');
     }
@@ -194,7 +199,7 @@ export default function WatererPanel({
     if (!cluster) return;
     try {
       await ClustersAPI.logManualWatering(cluster.public_id);
-      onUpdate();
+      refresh();
     } catch (error) {
       alert(error.response?.data?.error || 'Failed to log watering');
     }
@@ -212,7 +217,7 @@ export default function WatererPanel({
         const [h, m] = localTime.split(':').map(Number);
         await ClustersAPI.setPreferredHour(cluster.public_id, localTimeToUTCHour(h, m || 0, tz));
       }
-      onUpdate();
+      refresh();
     } catch (error) {
       alert(error.response?.data?.error || 'Failed to set preferred time');
     }
@@ -235,7 +240,8 @@ export default function WatererPanel({
     try {
       await MapObjectsAPI.update(watererNode.data.objectId, { name: editedName.trim() });
       setIsEditingName(false);
-      onUpdate();
+      // Rename changes the canvas label — refresh that node in place.
+      onNodeRefresh?.(watererNode.data.objectId);
     } catch (error) {
       console.error('Failed to update name:', error);
       alert('Failed to update name');
@@ -247,7 +253,7 @@ export default function WatererPanel({
 
     try {
       await ClustersAPI.rename(cluster.public_id, clusterName.trim());
-      onUpdate();
+      refresh();
     } catch (error) {
       console.error('Failed to rename cluster:', error);
       alert('Failed to rename cluster');
@@ -263,7 +269,7 @@ export default function WatererPanel({
       await MapObjectsAPI.update(watererNode.data.objectId, { 
         waterer_optimized_pot_size: newPotSize || null 
       });
-      onUpdate();
+      refresh();
     } catch (error) {
       console.error('Failed to update optimized pot size:', error);
       alert('Failed to update optimized pot size');
@@ -279,7 +285,7 @@ export default function WatererPanel({
       await MapObjectsAPI.update(watererNode.data.objectId, { 
         waterer_schedule: newSchedule || null 
       });
-      onUpdate();
+      refresh();
     } catch (error) {
       console.error('Failed to update waterer schedule:', error);
       alert('Failed to update waterer schedule');
@@ -452,7 +458,7 @@ export default function WatererPanel({
                     <label>Volume Adjustment</label>
                     <input
                       type="range"
-                      min="50"
+                      min="0"
                       max="150"
                       value={volumePct}
                       onChange={(e) => handleVolumeChange(Number(e.target.value))}

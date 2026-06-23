@@ -529,11 +529,21 @@ def _cluster_from_bearer() -> Optional[Cluster]:
     return Cluster.query.filter_by(device_token=token).first()
 
 
+# Global scale on all delivered watering volume. Field testing showed the
+# baseline table massively overwaters, so every dose is scaled to this
+# fraction of the table value. Applied in the volume calc (not stored), so it
+# takes effect for existing and new clusters alike. Tune here.
+WATERING_DOSE_FACTOR = 0.20
+
+
 def _effective_ml_per_week(cluster: Cluster) -> float:
     if cluster.baseline_ml_per_week is None:
         return 0.0
     plant_count = len(cluster.catalog_plants) or 1
-    return round(cluster.baseline_ml_per_week * plant_count * (cluster.ml_volume_pct / 100.0), 2)
+    return round(
+        cluster.baseline_ml_per_week * plant_count * (cluster.ml_volume_pct / 100.0) * WATERING_DOSE_FACTOR,
+        2,
+    )
 
 
 def _events_per_week(group: str) -> int:
@@ -1271,8 +1281,8 @@ def api_cluster_volume(public_id):
     except (TypeError, ValueError):
         return jsonify({"error": "invalid ml_volume_pct"}), 400
 
-    if pct < 50 or pct > 150:
-        return jsonify({"error": "ml_volume_pct must be between 50 and 150"}), 400
+    if pct < 0 or pct > 150:
+        return jsonify({"error": "ml_volume_pct must be between 0 and 150"}), 400
 
     c.ml_volume_pct = pct
     db.session.commit()

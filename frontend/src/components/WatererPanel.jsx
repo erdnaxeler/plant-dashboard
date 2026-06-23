@@ -465,7 +465,7 @@ export default function WatererPanel({
                       style={{ width: '100%' }}
                     />
                     <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '14px' }}>
-                      {volumePct}% {cluster.ml_per_event ? `(${Math.round(cluster.ml_per_event * volumePct / 100)} ml)` : ''}
+                      {volumePct}% {cluster.ml_per_event ? `(${Math.round(cluster.ml_per_event)} ml)` : ''}
                     </div>
                   </div>
 

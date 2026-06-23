@@ -1,3 +1,4 @@
+import json
 import os
 import secrets
 import uuid
@@ -202,7 +203,12 @@ class MapObject(db.Model):
     # Waterer-specific properties (independent of cluster)
     waterer_optimized_pot_size = db.Column(db.String(32), nullable=True)  # What pot size this waterer is optimized for
     waterer_schedule = db.Column(db.String(32), nullable=True)  # Watering schedule this waterer provides
-    
+
+    # Opaque JSON blob for apartment-layer layout (room width/height, doors,
+    # windows; block size/rotation). Stored/returned to the frontend as
+    # `metadata`. Attribute can't be named `metadata` — reserved by SQLAlchemy.
+    object_metadata = db.Column("object_metadata", db.Text, nullable=True)
+
     created_at = db.Column(
         db.DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -293,6 +299,13 @@ def _migrate_cluster_columns():
                     db.session.execute(text("ALTER TABLE map_object ADD COLUMN IF NOT EXISTS plant_nickname VARCHAR(128)"))
                 else:
                     db.session.execute(text("ALTER TABLE map_object ADD COLUMN plant_nickname VARCHAR(128)"))
+                db.session.commit()
+
+            if "object_metadata" not in map_obj_cols:
+                if dialect == "postgresql":
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN IF NOT EXISTS object_metadata TEXT"))
+                else:
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN object_metadata TEXT"))
                 db.session.commit()
 
         # Migrate WateringLog: per-plant attribution so history follows the plant.
@@ -1662,6 +1675,7 @@ def _serialize_map_object(obj: MapObject) -> dict[str, Any]:
         "map_x": obj.map_x,
         "map_y": obj.map_y,
         "cluster_id": obj.cluster_id,
+        "metadata": obj.object_metadata,
         "created_at": obj.created_at.isoformat() if obj.created_at else None,
         "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
     }
@@ -1762,9 +1776,9 @@ def _update_cluster_from_connections(waterer_id: int) -> Optional[str]:
         if existing.id not in connected_ids:
             existing.cluster_id = None
 
-    # More than 3 plants is already rejected at connection time; if it ever
+    # More than 2 plants is already rejected at connection time; if it ever
     # happens, leave the device alone and just don't over-attach.
-    if len(plants) > 3:
+    if len(plants) > 2:
         db.session.commit()
         return None
 
@@ -1880,7 +1894,13 @@ def api_map_objects_update(object_id):
     if "name" in payload:
         name = (payload.get("name") or "Object").strip()
         obj.name = name
-    
+
+    # Apartment-layer layout blob (room size/doors/windows, block size/rotation).
+    # Stored opaquely; the frontend owns the shape.
+    if "metadata" in payload:
+        meta = payload.get("metadata")
+        obj.object_metadata = meta if isinstance(meta, str) or meta is None else json.dumps(meta)
+
     # Update position if provided
     try:
         if "x" in payload:
@@ -2051,7 +2071,7 @@ def api_connections_create():
             if other_obj and other_obj.type == "waterer":
                 return jsonify({"error": "This plant is already connected to a waterer. Disconnect it first."}), 400
     
-    # Validation: A waterer cannot connect to more than 3 plants
+    # Validation: A waterer cannot connect to more than 2 plants
     if waterer_obj:
         existing_connections = Connection.query.filter(
             (Connection.from_object_id == waterer_obj.id) | 
@@ -2065,8 +2085,8 @@ def api_connections_create():
             if other_obj and other_obj.type == "plant":
                 plant_count += 1
         
-        if plant_count >= 3:
-            return jsonify({"error": "A waterer can only connect to a maximum of 3 plants"}), 400
+        if plant_count >= 2:
+            return jsonify({"error": "A waterer can only connect to a maximum of 2 plants"}), 400
     
     # Check if connection already exists (in either direction)
     existing = Connection.query.filter(

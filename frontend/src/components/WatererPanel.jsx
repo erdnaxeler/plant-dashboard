@@ -364,7 +364,7 @@ export default function WatererPanel({
 
         {/* Connected Plants Info */}
         <div className="property-group">
-          <label>Connected Plants ({connectedPlants.length}/3)</label>
+          <label>Connected Plants ({connectedPlants.length}/2)</label>
           <div className="property-value">
             {connectedPlants.length === 0 && 'None'}
             {connectedPlants.length > 0 && (
@@ -470,13 +470,12 @@ export default function WatererPanel({
                   </div>
 
                   <div className="property-group">
-                    <label>Preferred Watering Time{cluster.timezone ? ` (${cluster.timezone})` : ''}</label>
+                    <label>Preferred Watering Time</label>
                     <input
                       type="time"
                       value={utcHourToLocalTime(cluster.preferred_watering_hour_utc, cluster.timezone)}
                       onChange={(e) => handlePreferredTimeChange(e.target.value)}
                     />
-                    <small style={{ color: 'var(--text-dim)' }}>Leave empty to water anytime</small>
                   </div>
 
                   {cluster.next_watering_at && (
@@ -513,11 +512,21 @@ export default function WatererPanel({
               {cluster.has_device && (
                 <>
                   <div className="property-group">
-                    <label>Device Status</label>
-                    <div className="property-value">
-                      {cluster.device_status === 'ok' ? '✓ Connected' : cluster.device_status}
-                      {cluster.status_message ? ` — ${cluster.status_message}` : ''}
-                    </div>
+                    <label>Device</label>
+                    {(() => {
+                      const lastPing = cluster.last_device_ping_at ? new Date(cluster.last_device_ping_at).getTime() : 0;
+                      // Device polls every 60s; treat ~3 missed polls as offline.
+                      const online = !!lastPing && (Date.now() - lastPing < 3 * 60 * 1000);
+                      return (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
+                          <span style={{
+                            width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
+                            display: 'inline-block', background: online ? '#48bb78' : '#ecc94b',
+                          }} />
+                          {online ? 'Online' : 'Offline'}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {cluster.watering_armed ? (

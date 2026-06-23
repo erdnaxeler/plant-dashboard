@@ -284,6 +284,20 @@ def _migrate_cluster_columns():
                     db.session.execute(text("ALTER TABLE map_object ADD COLUMN waterer_schedule VARCHAR(32)"))
                 db.session.commit()
 
+            if "plant_type_id" not in map_obj_cols:
+                if dialect == "postgresql":
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN IF NOT EXISTS plant_type_id INTEGER"))
+                else:
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN plant_type_id INTEGER"))
+                db.session.commit()
+
+            if "plant_nickname" not in map_obj_cols:
+                if dialect == "postgresql":
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN IF NOT EXISTS plant_nickname VARCHAR(128)"))
+                else:
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN plant_nickname VARCHAR(128)"))
+                db.session.commit()
+
         # Migrate WateringLog: per-plant attribution so history follows the plant.
         if "watering_log" in insp.get_table_names():
             dialect = db.engine.dialect.name

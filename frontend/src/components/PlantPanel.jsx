@@ -8,11 +8,12 @@ const WATERING_GROUPS = {
   weekly: 'Weekly (1x/week)'
 };
 
-export default function PlantPanel({ 
-  plantNode, 
+export default function PlantPanel({
+  plantNode,
   cluster,
   onUpdate,
-  onDelete 
+  onNodeRefresh,
+  onDelete
 }) {
   const [catalogPlants, setCatalogPlants] = useState([]);
   const [plantTypeId, setPlantTypeId] = useState(null);
@@ -105,10 +106,10 @@ export default function PlantPanel({
       }
       
       await MapObjectsAPI.update(plantNode.data.objectId, updates);
-      
-      // Update the node label in the map
-      if (onUpdate) {
-        onUpdate();
+
+      // Refresh the node label in place (keeps the panel open / selected)
+      if (onNodeRefresh) {
+        onNodeRefresh(plantNode.data.objectId);
       }
     } catch (error) {
       console.error('Failed to update plant type:', error);
@@ -122,12 +123,12 @@ export default function PlantPanel({
     setNickname(newNickname);
     
     try {
-      await MapObjectsAPI.update(plantNode.data.objectId, { 
-        plant_nickname: newNickname || null 
+      await MapObjectsAPI.update(plantNode.data.objectId, {
+        plant_nickname: newNickname || null
       });
-      // Update the node label in the map
-      if (onUpdate) {
-        onUpdate();
+      // Refresh the node label in place (keeps the panel open / selected)
+      if (onNodeRefresh) {
+        onNodeRefresh(plantNode.data.objectId);
       }
     } catch (error) {
       console.error('Failed to update nickname:', error);

@@ -618,7 +618,7 @@ export default function MapEditor() {
     try {
       const clustersData = await ClustersAPI.getAll();
       setClusters(clustersData);
-      
+
       // Reload map data to get updated cluster associations and node labels
       await loadMapData();
     } catch (error) {
@@ -626,6 +626,24 @@ export default function MapEditor() {
       showToast('Failed to reload clusters', true);
     }
   }, []);
+
+  // Refresh a single node's label in place (no full reload, so the side panel
+  // keeps its selection). Used for plant type/nickname edits that change the
+  // node's display name but shouldn't deselect the node.
+  const handleNodeRefresh = useCallback(async (objectId) => {
+    try {
+      const obj = await MapObjectsAPI.get(objectId);
+      setNodes((nds) => nds.map((n) =>
+        n.data?.objectId === objectId ? { ...n, data: { ...n.data, label: obj.name } } : n
+      ));
+      // Keep cluster state fresh (a plant edit can re-derive the waterer's
+      // calibration) without touching node selection.
+      const clustersData = await ClustersAPI.getAll();
+      setClusters(clustersData);
+    } catch (error) {
+      console.error('Failed to refresh node:', error);
+    }
+  }, [setNodes]);
 
   const getNodeCluster = useCallback(() => {
     if (!selectedNode) return null;
@@ -1133,12 +1151,13 @@ export default function MapEditor() {
         apartmentMode={isApartmentMode}
       />
       {!isApartmentMode && (
-        <PropertiesPanel 
+        <PropertiesPanel
           selectedNode={selectedNode}
           connectedPlants={getConnectedPlants()}
           onDelete={handleDeleteNode}
           cluster={getNodeCluster()}
           onClusterUpdate={handleClusterUpdate}
+          onNodeRefresh={handleNodeRefresh}
         />
       )}
       

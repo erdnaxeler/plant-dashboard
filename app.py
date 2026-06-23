@@ -1747,16 +1747,31 @@ def _update_cluster_from_connections(waterer_id: int) -> Optional[str]:
         db.session.commit()
         return None
 
-    # When exactly one plant is connected, the waterer inherits its pot/schedule.
-    if len(plants) == 1:
-        plant = plants[0]
-        if plant.plant_pot_size:
-            waterer.waterer_optimized_pot_size = plant.plant_pot_size
-        if plant.plant_watering_schedule:
-            waterer.waterer_schedule = plant.plant_watering_schedule
-
     for plant in plants:
         plant.cluster_id = cluster.id
+
+    # Auto-calibrate the device from its connected plants (no manual step):
+    # adopt the first plant that has both a pot size and a known watering group
+    # — that defines the watering math. Other plants stay attached and watered;
+    # the frontend flags any whose pot/group differs. No usable plant -> the
+    # device stays uncalibrated (nothing to water).
+    cluster.catalog_plants.clear()
+    pot = group = None
+    for plant in plants:
+        cp = CatalogPlant.query.get(plant.plant_type_id) if plant.plant_type_id else None
+        if cp and cp not in cluster.catalog_plants:
+            cluster.catalog_plants.append(cp)
+        if pot is None and plant.plant_pot_size in WATERING_TABLE_ML_WEEK \
+                and cp and cp.watering_group in WATERING_GROUP_EVENTS_PER_WEEK:
+            pot, group = plant.plant_pot_size, cp.watering_group
+
+    if pot and group:
+        cluster.pot_size, cluster.watering_group = pot, group
+        cluster.baseline_ml_per_week = float(WATERING_TABLE_ML_WEEK[pot][group])
+        cluster.is_calibrated = True
+    else:
+        cluster.pot_size = cluster.watering_group = cluster.baseline_ml_per_week = None
+        cluster.is_calibrated = False
 
     db.session.commit()
     return None
@@ -1900,8 +1915,18 @@ def api_map_objects_update(object_id):
             if schedule and schedule not in WATERING_GROUP_EVENTS_PER_WEEK:
                 return jsonify({"error": "invalid schedule", "allowed": list(WATERING_GROUP_EVENTS_PER_WEEK.keys())}), 400
             obj.waterer_schedule = schedule
-    
+
     db.session.commit()
+
+    # If a connected plant's pot/type changed, re-derive its waterer's
+    # auto-calibration so the device's watering math stays in sync.
+    if obj.type == "plant" and obj.cluster_id and (
+        "plant_type_id" in payload or "plant_pot_size" in payload
+    ):
+        waterer = MapObject.query.filter_by(cluster_id=obj.cluster_id, type="waterer").first()
+        if waterer:
+            _update_cluster_from_connections(waterer.id)
+
     return jsonify(_serialize_map_object(obj))
 
 

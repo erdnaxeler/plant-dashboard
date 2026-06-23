@@ -3,12 +3,13 @@ import WatererPanel from './WatererPanel';
 import PlantPanel from './PlantPanel';
 import './PropertiesPanel.css';
 
-export default function PropertiesPanel({ 
-  selectedNode, 
+export default function PropertiesPanel({
+  selectedNode,
   connectedPlants,
-  onDelete, 
+  onDelete,
   cluster,
-  onClusterUpdate 
+  onClusterUpdate,
+  onNodeRefresh
 }) {
 
   // No node selected - show empty state
@@ -44,6 +45,7 @@ export default function PropertiesPanel({
         plantNode={selectedNode}
         cluster={cluster}
         onUpdate={onClusterUpdate}
+        onNodeRefresh={onNodeRefresh}
         onDelete={onDelete}
       />
     );

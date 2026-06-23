@@ -364,23 +364,36 @@ export default function WatererPanel({
             {connectedPlants.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 {connectedPlantsData.map(plant => {
-                  const hasMismatch = optimizedPotSize && plant.plant_pot_size && 
-                                      optimizedPotSize !== plant.plant_pot_size;
+                  // The device is auto-calibrated from the first usable plant;
+                  // flag any plant whose pot size or watering group differs.
+                  const potMismatch = cluster?.pot_size && plant.plant_pot_size &&
+                                      cluster.pot_size !== plant.plant_pot_size;
+                  const groupMismatch = cluster?.watering_group && plant.plant_watering_schedule &&
+                                        cluster.watering_group !== plant.plant_watering_schedule;
+                  const hasMismatch = potMismatch || groupMismatch;
                   return (
-                    <div key={plant.id} style={{ 
-                      padding: '6px 8px', 
+                    <div key={plant.id} style={{
+                      padding: '6px 8px',
                       background: 'var(--bg-light)',
-                      border: '1px solid var(--border)',
+                      border: `1px solid ${hasMismatch ? '#f6e05e' : 'var(--border)'}`,
                       borderRadius: '4px',
                       fontSize: '13px'
                     }}>
-                      <div>{plant.name}</div>
+                      <div>
+                        {hasMismatch && <span title="Doesn't match the device config" style={{ marginRight: '4px' }}>⚠️</span>}
+                        {plant.name}
+                      </div>
                       {plant.plant_pot_size && (
                         <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '2px' }}>
                           Pot: {plant.plant_pot_size}
-                          {hasMismatch && (
-                            <span style={{ color: '#f6e05e', marginLeft: '6px', fontWeight: '600' }}>
-                              ⚠ Mismatch!
+                          {potMismatch && (
+                            <span style={{ color: '#b7791f', marginLeft: '6px', fontWeight: '600' }}>
+                              ≠ device {cluster.pot_size}
+                            </span>
+                          )}
+                          {groupMismatch && (
+                            <span style={{ color: '#b7791f', marginLeft: '6px', fontWeight: '600' }}>
+                              ≠ device {cluster.watering_group}
                             </span>
                           )}
                         </div>
@@ -400,32 +413,14 @@ export default function WatererPanel({
             <div className="cluster-section">
               <h4>Device</h4>
 
-              {/* Calibration sets the watering amount (pot size + plant types).
-                  It's the watering-math setup — independent of pairing. */}
+              {/* Calibration is derived automatically from the connected
+                  plants (pot size + watering group) — no manual step. */}
               {!cluster.is_calibrated ? (
                 <div className="property-group">
-                  <label>Calibrate (pot size + plants)</label>
-                  <select value={potSize} onChange={(e) => setPotSize(e.target.value)}>
-                    <option value="">Select pot size...</option>
-                    {Object.entries(POT_SIZES).map(([k, v]) => (
-                      <option key={k} value={k}>{v}</option>
-                    ))}
-                  </select>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '8px' }}>
-                    {catalogPlants.map(p => (
-                      <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' }}>
-                        <input
-                          type="checkbox"
-                          checked={selectedPlantIds.includes(p.id)}
-                          onChange={() => togglePlantSelection(p.id)}
-                        />
-                        {p.name} <span style={{ color: 'var(--text-dim)' }}>({p.watering_group})</span>
-                      </label>
-                    ))}
+                  <div className="property-value" style={{ fontSize: '13px', color: 'var(--text-dim)' }}>
+                    Not calibrated yet. Connect a plant that has a <strong>pot size</strong> and
+                    <strong> type</strong> set — the device calibrates itself from its plants.
                   </div>
-                  <button className="btn-primary" style={{ marginTop: '8px' }} onClick={handleCalibrate}>
-                    Calibrate
-                  </button>
                 </div>
               ) : (
                 <>

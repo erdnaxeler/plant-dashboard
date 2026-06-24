@@ -55,6 +55,12 @@ export default function MapEditor() {
   const [mode, setMode] = useState('plants');
   const isApartmentMode = mode === 'apartment';
 
+  // LIFO stack of deletion batches for Ctrl+Z undo. Each entry is an array of
+  // backend objectIds deleted together, so one undo restores a whole batch
+  // (e.g. a multi-select delete). Soft-deleted rows persist server-side, so an
+  // undo just calls restore and reloads — connections/cluster/history return.
+  const undoStackRef = useRef([]);
+
   useEffect(() => {
     loadMapData();
   }, []);
@@ -429,13 +435,17 @@ export default function MapEditor() {
   const onNodesDelete = useCallback(async (deletedNodes) => {
     try {
       const deletedIds = new Set(deletedNodes.map((n) => n.id));
+      const objectIds = [];
       for (const node of deletedNodes) {
         const objectId = node.data.objectId;
         await MapObjectsAPI.delete(objectId);
+        objectIds.push(objectId);
       }
+      // Record this batch so a single Ctrl+Z restores all of them together.
+      if (objectIds.length) undoStackRef.current.push(objectIds);
       // Drop edges touching any deleted node so plants don't stay tied to a ghost.
       setEdges((eds) => eds.filter((e) => !deletedIds.has(e.source) && !deletedIds.has(e.target)));
-      showToast('Object deleted');
+      showToast('Object deleted — press ⌘Z / Ctrl+Z to undo');
 
       // Reload clusters
       const clustersData = await ClustersAPI.getAll();
@@ -464,6 +474,46 @@ export default function MapEditor() {
       showToast('Failed to delete connection', true);
     }
   }, []);
+
+  // Ctrl+Z / ⌘Z: pop the most recent deletion batch and restore those nodes.
+  // The backend kept the rows (soft delete), so after restoring we reload the
+  // map to bring the nodes, their edges, and cluster state back in one shot.
+  const handleUndo = useCallback(async () => {
+    const batch = undoStackRef.current.pop();
+    if (!batch || !batch.length) {
+      showToast('Nothing to undo');
+      return;
+    }
+    try {
+      for (const objectId of batch) {
+        await MapObjectsAPI.restore(objectId);
+      }
+      await loadMapData();
+      const clustersData = await ClustersAPI.getAll();
+      setClusters(clustersData);
+      showToast(batch.length > 1 ? `Restored ${batch.length} objects` : 'Restored');
+    } catch (error) {
+      console.error('Failed to undo delete:', error);
+      // Put the batch back so the user can retry.
+      undoStackRef.current.push(batch);
+      showToast('Failed to undo', true);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      // Don't hijack undo while the user is typing in a field.
+      const t = e.target;
+      const tag = t?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || t?.isContentEditable) return;
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        handleUndo();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleUndo]);
 
   const onSelectionChange = useCallback(({ nodes: selectedNodes }) => {
     if (selectedNodes.length > 0) {
@@ -603,14 +653,16 @@ export default function MapEditor() {
     try {
       const objectId = selectedNode.data.objectId;
       await MapObjectsAPI.delete(objectId);
+      // Record so a single Ctrl+Z restores this node (and its edges/cluster).
+      undoStackRef.current.push([objectId]);
 
       setNodes((nds) => nds.filter((n) => n.id !== selectedNode.id));
       // Drop any edges touching the deleted node — otherwise they dangle and
       // the formerly-connected plants stay "connected" to a ghost (can't
-      // reconnect until a reload). The backend already removed the rows.
+      // reconnect until a reload). The backend soft-deleted the rows.
       setEdges((eds) => eds.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id));
       setSelectedNode(null);
-      showToast('Object deleted');
+      showToast('Object deleted — press ⌘Z / Ctrl+Z to undo');
       
       // Reload clusters
       const clustersData = await ClustersAPI.getAll();

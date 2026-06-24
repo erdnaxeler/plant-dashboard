@@ -219,6 +219,11 @@ class MapObject(db.Model):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
+    # Soft delete: non-null means hidden from the map but preserved so a
+    # Ctrl+Z undo can restore the node with its original ID — keeping its
+    # watering history, connections, and cluster intact.
+    deleted_at = db.Column(db.DateTime(timezone=True), nullable=True, index=True)
+
 
 class Connection(db.Model):
     """Lines connecting MapObjects on the canvas."""
@@ -306,6 +311,13 @@ def _migrate_cluster_columns():
                     db.session.execute(text("ALTER TABLE map_object ADD COLUMN IF NOT EXISTS object_metadata TEXT"))
                 else:
                     db.session.execute(text("ALTER TABLE map_object ADD COLUMN object_metadata TEXT"))
+                db.session.commit()
+
+            if "deleted_at" not in map_obj_cols:
+                if dialect == "postgresql":
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE"))
+                else:
+                    db.session.execute(text("ALTER TABLE map_object ADD COLUMN deleted_at DATETIME"))
                 db.session.commit()
 
         # Migrate WateringLog: per-plant attribution so history follows the plant.
@@ -1818,7 +1830,11 @@ def api_map_objects_list():
     if not _require_dashboard_auth():
         return jsonify({"error": "Unauthorized"}), 401
     
-    objects = MapObject.query.order_by(MapObject.created_at.asc()).all()
+    objects = (
+        MapObject.query.filter(MapObject.deleted_at.is_(None))
+        .order_by(MapObject.created_at.asc())
+        .all()
+    )
     return jsonify([_serialize_map_object(obj) for obj in objects])
 
 
@@ -1829,9 +1845,9 @@ def api_map_objects_get(object_id):
         return jsonify({"error": "Unauthorized"}), 401
     
     obj = MapObject.query.get(object_id)
-    if not obj:
+    if not obj or obj.deleted_at is not None:
         return jsonify({"error": "not found"}), 404
-    
+
     return jsonify(_serialize_map_object(obj))
 
 
@@ -1971,46 +1987,90 @@ def api_map_objects_update(object_id):
     return jsonify(_serialize_map_object(obj))
 
 
+# Reserved key inside object_metadata holding state we must restore on undo.
+_PREDELETE_META_KEY = "_predelete"
+
+
+def _read_object_metadata(obj: MapObject) -> dict[str, Any]:
+    """Parse a MapObject's object_metadata JSON blob into a dict (empty if none)."""
+    if not obj.object_metadata:
+        return {}
+    try:
+        data = json.loads(obj.object_metadata)
+        return data if isinstance(data, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def _write_object_metadata(obj: MapObject, data: dict[str, Any]) -> None:
+    """Serialize a dict back into object_metadata, storing NULL when empty."""
+    obj.object_metadata = json.dumps(data) if data else None
+
+
 @app.route("/api/app/map-objects/<int:object_id>", methods=["DELETE"])
 def api_map_objects_delete(object_id):
-    """Delete a map object and its connections."""
+    """Soft-delete a map object so it can be restored with Ctrl+Z.
+
+    The row is marked with deleted_at and hidden from the list/get endpoints,
+    along with any connections touching it. Connections, cluster, and watering
+    history are left intact so a restore brings everything back with original
+    IDs. For a waterer, the paired device is disarmed so a 'deleted' node stops
+    watering; its prior armed state is stashed in object_metadata and
+    re-applied on restore.
+    """
     if not _require_dashboard_auth():
         return jsonify({"error": "Unauthorized"}), 401
-    
+
+    obj = MapObject.query.get(object_id)
+    if not obj or obj.deleted_at is not None:
+        return jsonify({"error": "not found"}), 404
+
+    # Pause watering for a deleted waterer, remembering its prior armed state.
+    if obj.type == "waterer" and obj.cluster_id:
+        cluster = Cluster.query.get(obj.cluster_id)
+        if cluster:
+            meta = _read_object_metadata(obj)
+            meta[_PREDELETE_META_KEY] = {"watering_armed": bool(cluster.watering_armed)}
+            _write_object_metadata(obj, meta)
+            cluster.watering_armed = False
+
+    obj.deleted_at = datetime.now(timezone.utc)
+    db.session.commit()
+
+    return jsonify({"ok": True})
+
+
+@app.route("/api/app/map-objects/<int:object_id>/restore", methods=["POST"])
+def api_map_objects_restore(object_id):
+    """Restore a soft-deleted map object (Ctrl+Z undo).
+
+    Clears deleted_at so the node, its connections, cluster, and watering
+    history reappear with their original IDs. Re-arms the waterer's device if
+    it was armed before deletion.
+    """
+    if not _require_dashboard_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+
     obj = MapObject.query.get(object_id)
     if not obj:
         return jsonify({"error": "not found"}), 404
-    
-    # Store cluster_id and type before deletion
-    cluster_id = obj.cluster_id
-    obj_type = obj.type
-    
-    # Delete all connections involving this object
-    Connection.query.filter(
-        (Connection.from_object_id == object_id) | 
-        (Connection.to_object_id == object_id)
-    ).delete(synchronize_session=False)
-    
-    # Delete the object
-    db.session.delete(obj)
+    if obj.deleted_at is None:
+        # Already live — make undo idempotent rather than erroring.
+        return jsonify(_serialize_map_object(obj))
+
+    # Re-arm the waterer's device to its pre-delete state, then drop the stash.
+    if obj.type == "waterer" and obj.cluster_id:
+        cluster = Cluster.query.get(obj.cluster_id)
+        meta = _read_object_metadata(obj)
+        stash = meta.pop(_PREDELETE_META_KEY, None)
+        if cluster and stash:
+            cluster.watering_armed = bool(stash.get("watering_armed", False))
+        _write_object_metadata(obj, meta)
+
+    obj.deleted_at = None
     db.session.commit()
-    
-    # Deleting the waterer node retires its device record. Detach plants,
-    # clear its watering history (watering_log.cluster_ref has no ON DELETE,
-    # so deleting the cluster first would FK-violate on Postgres), then drop
-    # the cluster.
-    if obj_type == "waterer" and cluster_id:
-        cluster = Cluster.query.get(cluster_id)
-        if cluster:
-            MapObject.query.filter_by(cluster_id=cluster_id).update(
-                {MapObject.cluster_id: None}, synchronize_session=False
-            )
-            WateringLog.query.filter_by(cluster_ref=cluster_id).delete(synchronize_session=False)
-            cluster.catalog_plants.clear()
-            db.session.delete(cluster)
-            db.session.commit()
-    
-    return jsonify({"ok": True})
+
+    return jsonify(_serialize_map_object(obj))
 
 
 @app.route("/api/app/connections", methods=["GET"])
@@ -2019,7 +2079,20 @@ def api_connections_list():
     if not _require_dashboard_auth():
         return jsonify({"error": "Unauthorized"}), 401
     
-    connections = Connection.query.order_by(Connection.created_at.asc()).all()
+    # Hide connections that touch a soft-deleted node — otherwise the frontend
+    # renders edges dangling off a node that's no longer on the canvas. The rows
+    # stay in the DB so an undo/restore brings the edges back automatically.
+    deleted_ids = [
+        row.id
+        for row in MapObject.query.filter(MapObject.deleted_at.isnot(None)).with_entities(MapObject.id).all()
+    ]
+    query = Connection.query
+    if deleted_ids:
+        query = query.filter(
+            Connection.from_object_id.notin_(deleted_ids),
+            Connection.to_object_id.notin_(deleted_ids),
+        )
+    connections = query.order_by(Connection.created_at.asc()).all()
     return jsonify([_serialize_connection(conn) for conn in connections])
 
 

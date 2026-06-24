@@ -22,6 +22,7 @@ export const MapObjectsAPI = {
   create: (type, name, x, y) => api.post('/map-objects', { type, name, x, y }).then(res => res.data),
   update: (id, data) => api.put(`/map-objects/${id}`, data).then(res => res.data),
   delete: (id) => api.delete(`/map-objects/${id}`).then(res => res.data),
+  restore: (id) => api.post(`/map-objects/${id}/restore`).then(res => res.data),
 };
 
 export const ConnectionsAPI = {

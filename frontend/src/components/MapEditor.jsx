@@ -61,6 +61,13 @@ export default function MapEditor() {
   // undo just calls restore and reloads — connections/cluster/history return.
   const undoStackRef = useRef([]);
 
+  // Node ids being deleted in the current gesture. React Flow's deleteElements
+  // fires onEdgesDelete (for edges connected to the deleted node) BEFORE
+  // onNodesDelete, so the edge handler defers a microtask and reads this to
+  // tell a node-deletion cascade (preserve the connection for undo) from a
+  // standalone edge delete (actually hard-delete it).
+  const pendingNodeDeleteRef = useRef(new Set());
+
   useEffect(() => {
     loadMapData();
   }, []);
@@ -433,6 +440,13 @@ export default function MapEditor() {
   }, []);
 
   const onNodesDelete = useCallback(async (deletedNodes) => {
+    // Mark these nodes so the cascade onEdgesDelete (which fired just before us
+    // this same tick) preserves their connections. Populate synchronously,
+    // before any await, since the edge handler reads it a microtask later.
+    // Cleared on the next macrotask so later standalone edge deletes still work.
+    deletedNodes.forEach((n) => pendingNodeDeleteRef.current.add(n.id));
+    setTimeout(() => pendingNodeDeleteRef.current.clear(), 0);
+
     try {
       const deletedIds = new Set(deletedNodes.map((n) => n.id));
       const objectIds = [];
@@ -457,18 +471,30 @@ export default function MapEditor() {
   }, []);
 
   const onEdgesDelete = useCallback(async (deletedEdges) => {
+    // Defer one microtask so onNodesDelete (fires right after us in React Flow's
+    // deleteElements) can record which nodes are going away. Then hard-delete
+    // ONLY truly standalone edges; an edge removed because its node was deleted
+    // keeps its connection row so restoring the node brings the edge back.
+    await Promise.resolve();
+    const deletingNodeIds = new Set(pendingNodeDeleteRef.current);
     try {
+      let deletedAny = false;
       for (const edge of deletedEdges) {
         const connectionId = edge.data?.connectionId;
-        if (connectionId) {
-          await ConnectionsAPI.delete(connectionId);
+        if (!connectionId) continue;
+        if (deletingNodeIds.has(edge.source) || deletingNodeIds.has(edge.target)) {
+          // Cascade from a node deletion — preserve the connection for undo.
+          continue;
         }
+        await ConnectionsAPI.delete(connectionId);
+        deletedAny = true;
       }
-      showToast('Connection deleted');
-      
-      // Reload clusters
-      const clustersData = await ClustersAPI.getAll();
-      setClusters(clustersData);
+      if (deletedAny) {
+        showToast('Connection deleted');
+        // Reload clusters
+        const clustersData = await ClustersAPI.getAll();
+        setClusters(clustersData);
+      }
     } catch (error) {
       console.error('Failed to delete edge:', error);
       showToast('Failed to delete connection', true);
